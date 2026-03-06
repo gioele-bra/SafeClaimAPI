@@ -59,12 +59,31 @@ class MongoDBService:
             self._db = None
             logger.info("Connessione a MongoDB chiusa")
     
+    def _sanitize_user_doc(self, user: Dict) -> Dict:
+        """Rimuove dai documenti qualsiasi campo sensibile.
+
+        Attualmente scarta i campi:
+        - password / pwd / pwdHash
+        - secret / token / apiKey
+        - qualunque chiave inizi con "_" oltre all'id (protegge metadata interni)
+        """
+        sanitized = {}
+        for k, v in user.items():
+            low = k.lower()
+            if low in ("password", "pwd", "pwdhash", "secret", "token", "apikey"):
+                continue
+            if k.startswith("_") and k != "_id":
+                # non includere campi interni di MongoDB come _cls, _type, etc.
+                continue
+            sanitized[k] = v
+        return sanitized
+
     def get_active_users(self) -> List[Dict]:
         """
         Recupera tutti gli utenti attivi da MongoDB
         
-        Returns:
-            Lista di utenti attivi
+        I documenti restituiti vengono filtrati sul lato server per
+        escludere eventuali campi sensibili indesiderati.
         """
         try:
             db = self.get_db()
@@ -92,12 +111,14 @@ class MongoDBService:
                 }
             ))
             
-            # Converti ObjectId a string per la serializzazione JSON
+            # Converti ObjectId a string per la serializzazione JSON e sanifica
+            sanitized = []
             for user in active_users:
                 if "_id" in user:
                     user["_id"] = str(user["_id"])
+                sanitized.append(self._sanitize_user_doc(user))
             
-            return active_users
+            return sanitized
         except Exception as e:
             logger.error(f"Errore nel recupero utenti attivi: {str(e)}")
             raise
@@ -154,12 +175,14 @@ class MongoDBService:
                 }
             ))
             
-            # Converti ObjectId a string per la serializzazione JSON
+            # Converti ObjectId a string per la serializzazione JSON e sanifica
+            sanitized = []
             for user in users:
                 if "_id" in user:
                     user["_id"] = str(user["_id"])
+                sanitized.append(self._sanitize_user_doc(user))
             
-            return users
+            return sanitized
         except Exception as e:
             logger.error(f"Errore nel recupero utenti per categoria '{category}': {str(e)}")
             raise
