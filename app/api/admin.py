@@ -1,10 +1,10 @@
 from flask import Blueprint, jsonify, request
-import uuid # Ci serve per generare ID finti quando crei un utente
+import uuid 
 
 bp = Blueprint("users_admin", __name__)
 
 # ==========================================
-# MOCK DATABASE (stessa struttura)
+# MOCK DATABASE
 # ==========================================
 MOCK_USERS = [
     {"id": "0", "username": "Giovanni", "email": "giovanni@email.com", "nome": "Giovanni", "cognome": "Rossi", "attivo": "True", "telefono": "123456", "ruolo": ["automobilista", "officina"]},
@@ -34,12 +34,32 @@ def count_all_users():
             "total_users": totale,
             "active_users": attivi
         }), 200
-
     except Exception as e:
         return jsonify({
             "error": "INTERNAL_SERVER_ERROR", 
             "message": f"Errore durante il conteggio: {str(e)}"
         }), 500
+
+# ==========================================
+# 📊 NUOVA API: REPORT RUOLI (CONTEGGIO)
+# ==========================================
+@bp.get("/roles-report")
+def get_roles_report():
+    """Restituisce tutti i ruoli con il relativo numero di utenti"""
+    try:
+        report = {}
+        # Estraiamo tutti i ruoli presenti
+        for user in MOCK_USERS:
+            for r in user.get("ruolo", []):
+                r_clean = r.lower()
+                report[r_clean] = report.get(r_clean, 0) + 1
+        
+        return jsonify({
+            "status": "success",
+            "roles_count": report
+        }), 200
+    except Exception as e:
+        return jsonify({"error": "REPORT_ERROR", "message": str(e)}), 500
 
 # =========================
 # GET singolo utente
@@ -49,17 +69,14 @@ def get_user(user_id):
     for user in MOCK_USERS:
         if user["id"] == str(user_id):
             return jsonify(user), 200
-            
     return jsonify({"error": "NOT_FOUND", "message": "Utente non trovato"}), 404
 
-
 # =========================
-# CREA utente (ruoli solo alla creazione)
+# CREA utente
 # =========================
 @bp.post("/")
 def create_user():
     data = request.get_json(silent=True) or {}
-
     nome = (data.get("nome") or "").strip()
     cognome = (data.get("cognome") or "").strip()
     email = (data.get("email") or "").strip()
@@ -71,15 +88,11 @@ def create_user():
             "message": "nome, cognome, email e telefono sono obbligatori"
         }), 400
 
-    # Controllo finto per email duplicata
     if any(u["email"] == email for u in MOCK_USERS):
-        return jsonify({
-            "error": "BAD_REQUEST",
-            "message": "Email già registrata"
-        }), 400
+        return jsonify({"error": "BAD_REQUEST", "message": "Email già registrata"}), 400
 
     nuovo_utente = {
-        "id": str(uuid.uuid4())[:8], # Genera un ID finto e corto
+        "id": str(uuid.uuid4())[:8],
         "username": nome,
         "nome": nome,
         "cognome": cognome,
@@ -88,11 +101,8 @@ def create_user():
         "attivo": "True",
         "ruolo": data.get("roles", [])
     }
-
     MOCK_USERS.append(nuovo_utente)
-
     return jsonify(nuovo_utente), 201
-
 
 # =========================
 # MODIFICA utente (NO RUOLI)
@@ -100,16 +110,11 @@ def create_user():
 @bp.put("/<user_id>")
 def update_user(user_id):
     data = request.get_json(silent=True) or {}
-
     for user in MOCK_USERS:
         if user["id"] == str(user_id):
             user["nome"] = data.get("nome", user["nome"])
             user["cognome"] = data.get("cognome", user["cognome"])
             user["email"] = data.get("email", user["email"])
             user["telefono"] = data.get("telefono", user.get("telefono", ""))
-            
-            # ⚠ I RUOLI NON SI POSSONO MODIFICARE
-            
             return jsonify(user), 200
-
     return jsonify({"error": "NOT_FOUND", "message": "Utente non trovato"}), 404
