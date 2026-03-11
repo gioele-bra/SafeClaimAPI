@@ -1,11 +1,30 @@
 from flask import Blueprint, jsonify, request
-from ..services.token_service import issue_token, get_current_user
-from ..services.user_service import (
-    get_user_list, get_user_count, get_active_roles, 
-    activate_user, delete_user, search_users
-)
+from functools import wraps
+# Se hai questo file tienilo, altrimenti commentalo
+# from ..services.token_service import issue_token 
 
 bp = Blueprint("gestioneUtenti", __name__)
+
+# ==========================================
+# ⚠ DECORATORE FITTIZIO PER EVITARE ERRORI
+# ==========================================
+def get_current_user(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        # Qui in futuro metterai il controllo del token
+        return f(*args, **kwargs)
+    return decorated
+
+# ==========================================
+# MOCK DATABASE
+# ==========================================
+MOCK_USERS = [
+    {"id": "0", "username": "Giovanni", "email": "giovanni@email.com", "nome": "Giovanni", "cognome": "Rossi", "attivo": "True", "ruolo": ["automobilista", "officina"]},
+    {"id": "1", "username": "Mario", "email": "mario@email.com", "nome": "Mario", "cognome": "Verdi", "attivo": "True", "ruolo": ["automobilista"]},
+    {"id": "2", "username": "Luigi", "email": "luigi@email.com", "nome": "Luigi", "cognome": "Neri", "attivo": "False", "ruolo": ["officina"]},
+    {"id": "3", "username": "Anna", "email": "anna@email.com", "nome": "Anna", "cognome": "Bianchi", "attivo": "True", "ruolo": ["automobilista"]},
+    {"id": "4", "username": "Paola", "email": "paola@email.com", "nome": "Paola", "cognome": "Gialli", "attivo": "True", "ruolo": ["admin"]}
+]
 
 # Endpoint originale per login/token
 @bp.post("/")
@@ -16,7 +35,8 @@ def login():
     if not username:
         return jsonify({"error": "BAD_REQUEST", "message": "username obbligatorio"}), 400
 
-    token = issue_token(username)
+    # token = issue_token(username) # Scommenta se usi token_service
+    token = "token_provvisorio_123"
     return jsonify({"access_token": token, "token_type": "bearer"}), 200
 
 # RICHIESTA UTENTI (lista completa con email, nome, cognome)
@@ -24,66 +44,65 @@ def login():
 def get_utenti():
     """Restituisce lista utenti con email, nome, cognome"""
     try:
-        users = get_user_list()
-        return jsonify({
-            "utenti": [{
-                "id": user.id,
-                "username": user.username,
-                "email": user.email,
-                "nome": user.nome,
-                "cognome": user.cognome,
-                "attivo": user.attivo,
-                "ruolo": user.ruolo
-            } for user in users]
-        }), 200
+        return jsonify({"utenti": MOCK_USERS}), 200
     except Exception as e:
         return jsonify({"error": "INTERNAL_ERROR", "message": str(e)}), 500
 
-# NUMERO UTENTI DISPONIBILI
+# NUMERO UTENTI ATTIVI E TOTALI
 @bp.get("/utenti/count")
 def get_numero_utenti():
-    """Restituisce numero totale utenti disponibili"""
+    """Restituisce numero totale utenti e numero utenti attivi"""
     try:
-        count = get_user_count()
-        return jsonify({"totale_utenti": count}), 200
+        totale = len(MOCK_USERS)
+        # Conta solo quelli con attivo == "True"
+        attivi = sum(1 for u in MOCK_USERS if u.get("attivo") == "True")
+        
+        return jsonify({
+            "totale_utenti": totale,
+            "utenti_attivi": attivi
+        }), 200
     except Exception as e:
         return jsonify({"error": "INTERNAL_ERROR", "message": str(e)}), 500
 
 # RUOLI ATTIVI
 @bp.get("/utenti/ruoli")
 def get_ruoli_attivi():
-    """Restituisce lista ruoli attivi"""
+    """Restituisce lista ruoli attivi finti"""
     try:
-        ruoli = get_active_roles()
+        ruoli = ["admin", "automobilista", "officina"]
         return jsonify({"ruoli_attivi": ruoli}), 200
     except Exception as e:
         return jsonify({"error": "INTERNAL_ERROR", "message": str(e)}), 500
 
 # ATTIVAZIONE UTENTE
-@bp.patch("/utenti/<int:user_id>/attiva")
-@get_current_user  # Decoratore per verificare token e autorizzazione
+@bp.patch("/utenti/<user_id>/attiva")
+@get_current_user  # Ora funziona senza bloccare il server
 def attiva_utente(user_id):
     """Attiva un utente specifico"""
     try:
-        result = activate_user(user_id)
-        if result:
-            return jsonify({"message": f"Utente {user_id} attivato con successo"}), 200
-        else:
-            return jsonify({"error": "UTENTE_NON_TROVATO", "message": "Utente non trovato"}), 404
+        for user in MOCK_USERS:
+            if user["id"] == str(user_id):
+                user["attivo"] = "True"
+                return jsonify({"message": f"Utente {user_id} attivato con successo", "utente": user}), 200
+        
+        return jsonify({"error": "UTENTE_NON_TROVATO", "message": "Utente non trovato"}), 404
     except Exception as e:
         return jsonify({"error": "INTERNAL_ERROR", "message": str(e)}), 500
 
 # ELIMINA UTENTE
-@bp.delete("/utenti/<int:user_id>")
+@bp.delete("/utenti/<user_id>")
 @get_current_user
 def elimina_utente(user_id):
-    """Elimina un utente specifico"""
+    """Elimina un utente specifico (lo toglie dalla lista provvisoria)"""
     try:
-        result = delete_user(user_id)
-        if result:
+        global MOCK_USERS
+        nuova_lista = [u for u in MOCK_USERS if u["id"] != str(user_id)]
+        
+        if len(nuova_lista) < len(MOCK_USERS):
+            MOCK_USERS = nuova_lista
             return jsonify({"message": f"Utente {user_id} eliminato con successo"}), 200
-        else:
-            return jsonify({"error": "UTENTE_NON_TROVATO", "message": "Utente non trovato"}), 404
+        
+        return jsonify({"error": "UTENTE_NON_TROVATO", "message": "Utente non trovato"}), 404
     except Exception as e:
         return jsonify({"error": "INTERNAL_ERROR", "message": str(e)}), 500
 
@@ -91,52 +110,32 @@ def elimina_utente(user_id):
 @bp.get("/utenti/cerca")
 def cerca_utenti():
     """Cerca utenti per nome, cognome, email o username"""
-    query = request.args.get("q", "").strip()
+    query = request.args.get("q", "").strip().lower()
     if not query:
         return jsonify({"error": "BAD_REQUEST", "message": "parametro 'q' obbligatorio"}), 400
     
     try:
-        users = search_users(query)
-        return jsonify({
-            "utenti_trovati": [{
-                "id": user.id,
-                "username": user.username,
-                "email": user.email,
-                "nome": user.nome,
-                "cognome": user.cognome,
-                "attivo": user.attivo
-            } for user in users]
-        }), 200
+        trovati = []
+        for u in MOCK_USERS:
+            if (query in u["nome"].lower() or 
+                query in u["cognome"].lower() or 
+                query in u["email"].lower() or 
+                query in u["username"].lower()):
+                trovati.append(u)
+                
+        return jsonify({"utenti_trovati": trovati}), 200
     except Exception as e:
         return jsonify({"error": "INTERNAL_ERROR", "message": str(e)}), 500
 
-# Esempio di GET singolo utente per completezza
-@bp.get("/utenti/<int:user_id>")
+# GET SINGOLO UTENTE
+@bp.get("/utenti/<user_id>")
 def get_singolo_utente(user_id):
     """Ottiene dettagli singolo utente"""
     try:
-        user = get_user_list(user_id=user_id).first()  # Implementazione nel service
-        if not user:
-            return jsonify({"error": "UTENTE_NON_TROVATO"}), 404
-        
-        return jsonify({
-            "id": user.id,
-            "username": user.username,
-            "email": user.email,
-            "nome": user.nome,
-            "cognome": user.cognome,
-            "attivo": user.attivo,
-            "ruolo": user.ruolo
-        }), 200
+        for user in MOCK_USERS:
+            if user["id"] == str(user_id):
+                return jsonify(user), 200
+                
+        return jsonify({"error": "UTENTE_NON_TROVATO"}), 404
     except Exception as e:
         return jsonify({"error": "INTERNAL_ERROR", "message": str(e)}), 500
-
-
-#"Metodo","Endpoint","Descrizione"
-#"POST","/","Login (token) [ESISTENTE]"
-#"GET","/utenti","Lista utenti completa"
-#"GET","/utenti/count","Numero utenti totali"
-#"GET","/utenti/ruoli","Ruoli attivi"
-#"PATCH","/utenti/:id/attiva","Attiva utente"
-#"DELETE","/utenti/:id","Elimina utente"
-#"GET","/utenti/cerca?q=","Cerca utenti (query param)"
