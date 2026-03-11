@@ -1,6 +1,6 @@
 from flask import Blueprint, jsonify, request
 from werkzeug.security import check_password_hash, generate_password_hash
-from ..services.token_service import issue_token
+from ..services.token_service import issue_token, revoke_token
 
 bp = Blueprint("auth", __name__)
 
@@ -50,4 +50,24 @@ def admin_login():
         "token_type": "bearer",
         "role": "admin",
         "email": email
+    }), 200
+
+
+# --- LOGOUT ---
+@bp.post("/logout")
+def logout():
+    # 1. Estrae il token dall'header Authorization (es: "Bearer demo-token-xxx")
+    auth_header = request.headers.get("Authorization")
+    
+    if auth_header and auth_header.startswith("Bearer "):
+        # Prende solo la parte del token, scartando la parola "Bearer"
+        token = auth_header.split(" ")[1]
+        
+        # 2. Invalida il token tramite il service
+        revoke_token(token)
+
+    # 3. Risponde al client. 
+    # N.B. Il frontend dovrà occuparsi di cancellare il token dal localStorage/sessionStorage.
+    return jsonify({
+        "message": "Logout completato con successo"
     }), 200
