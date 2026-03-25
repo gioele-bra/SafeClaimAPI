@@ -4,11 +4,14 @@ from ..services.token_service import issue_token, revoke_token
 
 bp = Blueprint("auth", __name__)
 
+# Explicitly use PBKDF2 because this Python build does not provide hashlib.scrypt.
+PASSWORD_HASH_METHOD = "pbkdf2:sha256"
+
 # --- DIZIONARIO AMMINISTRATORI ---
 # Chiave: Email dell'admin
 # Valore: Password criptata in modo sicuro (hash) della stringa "admin123"
 ADMIN_USERS = {
-    "admin@safeclaim.it": generate_password_hash("admin123")
+    "admin@safeclaim.it": generate_password_hash("admin123", method=PASSWORD_HASH_METHOD)
 }
 
 # --- LOGIN UTENTE NORMALE ---
