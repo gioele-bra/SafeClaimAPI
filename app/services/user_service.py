@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-# semplice rappresentazione di un utente nella memoria
+
 @dataclass
 class User:
     id: int
@@ -11,9 +11,18 @@ class User:
     cognome: str
     attivo: bool = True
     ruolo: str = "user"
+    roles: List[str] = field(default_factory=list)
+    password: str = ""
 
-# lista simulata di utenti "salvati" in memoria. In un progetto reale
-# questi metodi sarebbero implementati con accesso al database.
+    def __post_init__(self):
+        if not self.roles:
+            self.roles = [self.ruolo]
+
+
+class UserAlreadyExistsError(Exception):
+    pass
+
+
 _users: List[User] = [
     User(id=1, username="alice", email="alice@example.com", nome="Alice", cognome="Rossi", attivo=True, ruolo="admin"),
     User(id=2, username="bob", email="bob@example.com", nome="Bob", cognome="Verdi", attivo=False, ruolo="user"),
@@ -43,7 +52,7 @@ def get_user_list(active_only: bool = False, user_id: Optional[int] = None):
 def get_user_count(active_only: bool = False):
     """Conta gli utenti esistenti.
 
-    ``active_only`` permette di considerare solamente gli utenti attivi."
+    ``active_only`` permette di considerare solamente gli utenti attivi."""
     if active_only:
         return len([u for u in _users if u.attivo])
     return len(_users)
@@ -82,3 +91,34 @@ def search_users(query):
             or q in u.nome.lower()
             or q in u.cognome.lower()]
 
+
+def create_user(username: str, email: str, password: str, roles: Optional[List[str]] = None):
+    """Crea un utente in memoria per gli endpoint demo."""
+    normalized_username = (username or "").strip()
+    normalized_email = (email or "").strip().lower()
+    normalized_roles = list(dict.fromkeys(roles or ["user"]))
+
+    existing = next(
+        (
+            u for u in _users
+            if u.username.lower() == normalized_username.lower()
+            or u.email.lower() == normalized_email
+        ),
+        None,
+    )
+    if existing:
+        raise UserAlreadyExistsError("Username o email gia registrati")
+
+    next_id = max((u.id for u in _users), default=0) + 1
+    user = User(
+        id=next_id,
+        username=normalized_username,
+        email=normalized_email,
+        nome=normalized_username,
+        cognome="",
+        ruolo=normalized_roles[0],
+        roles=normalized_roles,
+        password=password,
+    )
+    _users.append(user)
+    return user

@@ -39,12 +39,41 @@ def get_utenti():
     except Exception as e:
         return jsonify({"error": "INTERNAL_ERROR", "message": str(e)}), 500
 
+
+# UTENTI ATTIVI
+@bp.get("/utenti/attivi")
+def get_utenti_attivi():
+    """Restituisce solo gli utenti con il flag ``attivo`` a True"""
+    try:
+        users = get_user_list(active_only=True)
+        return jsonify({
+            "utenti": [{
+                "id": user.id,
+                "username": user.username,
+                "email": user.email,
+                "nome": user.nome,
+                "cognome": user.cognome,
+                "attivo": user.attivo,
+                "ruolo": user.ruolo
+            } for user in users]
+        }), 200
+    except Exception as e:
+        return jsonify({"error": "INTERNAL_ERROR", "message": str(e)}), 500
+
 # NUMERO UTENTI DISPONIBILI
 @bp.get("/utenti/count")
 def get_numero_utenti():
-    """Restituisce numero totale utenti disponibili"""
+    """Restituisce numero totale utenti disponibili.
+
+    Accetta il query parameter ``attivo`` (valori "true"/"1") per contare
+    soltanto gli utenti attivi.
+    """
     try:
-        count = get_user_count()
+        active_param = request.args.get("attivo", "").lower()
+        active_only = active_param in ("1", "true", "yes")
+        count = get_user_count(active_only=active_only)
+        if active_only:
+            return jsonify({"totale_utenti_attivi": count}), 200
         return jsonify({"totale_utenti": count}), 200
     except Exception as e:
         return jsonify({"error": "INTERNAL_ERROR", "message": str(e)}), 500
@@ -115,7 +144,8 @@ def cerca_utenti():
 def get_singolo_utente(user_id):
     """Ottiene dettagli singolo utente"""
     try:
-        user = get_user_list(user_id=user_id).first()  # Implementazione nel service
+        users = get_user_list(user_id=user_id)
+        user = users[0] if users else None
         if not user:
             return jsonify({"error": "UTENTE_NON_TROVATO"}), 404
         
@@ -135,7 +165,8 @@ def get_singolo_utente(user_id):
 #"Metodo","Endpoint","Descrizione"
 #"POST","/","Login (token) [ESISTENTE]"
 #"GET","/utenti","Lista utenti completa"
-#"GET","/utenti/count","Numero utenti totali"
+#"GET","/utenti/attivi","Lista utenti con attivo=true"
+#"GET","/utenti/count","Numero utenti totali (query param ?attivo=true per contare solo attivi)"
 #"GET","/utenti/ruoli","Ruoli attivi"
 #"PATCH","/utenti/:id/attiva","Attiva utente"
 #"DELETE","/utenti/:id","Elimina utente"
