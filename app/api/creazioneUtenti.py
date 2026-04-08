@@ -1,19 +1,9 @@
-from flask import Blueprint, jsonify, request
-import uuid  # Aggiunto per generare ID finti
-
-# Ho rimosso l'import che mandava in crash il server
-# from ..services import create_user, UserAlreadyExistsError
+from flask import Blueprint, jsonify, request, g
+from werkzeug.security import generate_password_hash
 
 bp = Blueprint("creazioneUtenti", __name__)
 
-VALID_ROLES = {"admin", "soccorso", "officina", "perito"}
-
-
-def _validate_roles(roles: list) -> tuple[list, list]:
-    """Restituisce (ruoli_validi, ruoli_non_validi)."""
-    valid = [r for r in roles if r in VALID_ROLES]
-    invalid = [r for r in roles if r not in VALID_ROLES]
-    return valid, invalid
+VALID_ROLES = {"admin", "automobilista", "perito", "officina", "assicuratore", "azienda"}
 
 
 @bp.post("/users")
@@ -23,64 +13,71 @@ def create_user_endpoint():
 
     Body JSON:
     {
-        "username": "mario",
+        "nome": "Mario",
+        "cognome": "Rossi",
         "email": "mario@example.com",
         "password": "SecretPass123",
-        "roles": ["admin", "perito"]   // lista di ruoli attivi nel DB
+        "telefono": "3331234567",
+        "ruolo": "automobilista,perito"
     }
     """
     data = request.get_json(silent=True) or {}
 
-    # --- Campi obbligatori ---
-    username = (data.get("username") or "").strip()
+    nome = (data.get("nome") or "").strip()
+    cognome = (data.get("cognome") or "").strip()
     email = (data.get("email") or "").strip()
     password = (data.get("password") or "").strip()
-    roles_raw = data.get("roles", [])
+    telefono = (data.get("telefono") or "").strip()
+    roles_raw = data.get("ruolo", "")
 
-    # --- Validazione campi base ---
-    missing = [f for f, v in [("username", username), ("email", email), ("password", password)] if not v]
+    missing = [f for f, v in [("nome", nome), ("cognome", cognome),
+                               ("email", email), ("password", password)] if not v]
     if missing:
         return jsonify({
             "error": "BAD_REQUEST",
             "message": f"Campi obbligatori mancanti: {', '.join(missing)}"
         }), 400
 
-    # --- Validazione formato email (semplice) ---
     if "@" not in email or "." not in email.split("@")[-1]:
+        return jsonify({"error": "BAD_REQUEST", "message": "Formato email non valido"}), 400
+
+    # Validazione ruoli
+    if isinstance(roles_raw, list):
+        roles_input = [str(r).strip().lower() for r in roles_raw]
+    else:
+        roles_input = [r.strip().lower() for r in str(roles_raw).split(",") if r.strip()]
+
+    invalid = [r for r in roles_input if r not in VALID_ROLES]
+    if invalid:
         return jsonify({
             "error": "BAD_REQUEST",
-            "message": "Formato email non valido"
-        }), 400
-
-    # --- Validazione ruoli ---
-    if not isinstance(roles_raw, list):
-        return jsonify({
-            "error": "BAD_REQUEST",
-            "message": "Il campo 'roles' deve essere una lista di stringhe"
-        }), 400
-
-    # Normalizza in lowercase e rimuovi duplicati
-    roles_input = list({str(r).strip().lower() for r in roles_raw})
-
-    valid_roles, invalid_roles = _validate_roles(roles_input)
-
-    if invalid_roles:
-        return jsonify({
-            "error": "BAD_REQUEST",
-            "message": f"Ruoli non riconosciuti: {', '.join(invalid_roles)}. "
+            "message": f"Ruoli non riconosciuti: {', '.join(invalid)}. "
                        f"Ruoli ammessi: {', '.join(sorted(VALID_ROLES))}"
         }), 400
 
-    # --- Creazione utente fittizia (Mock) ---
-    # Generiamo un ID finto al volo e restituiamo i dati come se fossero stati salvati
-    nuovo_id = str(uuid.uuid4())[:8]
+    ruolo_set = ",".join(roles_input) if roles_input else "automobilista"
+
+    pwd_hash = generate_password_hash(password)
+
+    try:
+        g.db.execute(
+            "INSERT INTO Utente (nome, cognome, email, telefono, password_hash, ruolo) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
+            (nome, cognome, email, telefono or None, pwd_hash, ruolo_set)
+        )
+        new_id = g.db.lastrowid
+    except Exception as e:
+        if "Duplicate entry" in str(e):
+            return jsonify({"error": "BAD_REQUEST", "message": "Email già registrata"}), 400
+        raise
 
     return jsonify({
-        "message": "Utente creato con successo (Mock)",
+        "message": "Utente creato con successo",
         "user": {
-            "id": nuovo_id,
-            "username": username,
+            "id": new_id,
+            "nome": nome,
+            "cognome": cognome,
             "email": email,
-            "roles": valid_roles,
+            "ruolo": roles_input or ["automobilista"],
         }
     }), 201

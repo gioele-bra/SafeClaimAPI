@@ -1,39 +1,54 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, g
 
-# Definizione del Blueprint
 bp = Blueprint("richieste", __name__)
 
-# Dizionario locale che simula il Database
-MOCK_DATA = [
-    {"id": 1, "datetime": "2024-05-20 10:30:00", "status": "Da gestire"},
-    {"id": 2, "datetime": "2024-05-21 11:00:00", "status": "In corso"},
-    {"id": 3, "datetime": "2024-05-21 14:20:00", "status": "Completate"},
-    {"id": 4, "datetime": "2024-05-22 09:15:00", "status": "Da gestire"}
-]
+VALID_STATUSES = {"in_attesa", "assegnata", "in_corso", "completata", "annullata"}
+
 
 @bp.get("/")
 def get_requests():
-    # Recuperiamo il parametro 'status' dalla query string (es: ?status=In corso)
     status_filter = request.args.get("status")
 
-    # Se il filtro è presente e non è "Tutte", filtriamo la lista
-    if status_filter and status_filter != "Tutte":
-        # Validazione base per gli stati ammessi
-        valid_statuses = ["Da gestire", "In corso", "Completate"]
-        
-        if status_filter not in valid_statuses:
+    if status_filter and status_filter != "tutte":
+        if status_filter not in VALID_STATUSES:
             return jsonify({
-                "error": "BAD_REQUEST", 
-                "message": f"Stato '{status_filter}' non valido."
+                "error": "BAD_REQUEST",
+                "message": f"Stato '{status_filter}' non valido. "
+                           f"Valori ammessi: {', '.join(sorted(VALID_STATUSES))}"
             }), 400
-            
-        filtered_data = [r for r in MOCK_DATA if r["status"] == status_filter]
-    else:
-        # Se status è None o "Tutte", restituiamo tutto
-        filtered_data = MOCK_DATA
 
-    return jsonify({
-        "success": True,
-        "count": len(filtered_data),
-        "data": filtered_data
-    }), 200
+        g.db.execute(
+            "SELECT * FROM Richiesta_Soccorso WHERE stato = %s ORDER BY data_richiesta DESC",
+            (status_filter,)
+        )
+    else:
+        g.db.execute("SELECT * FROM Richiesta_Soccorso ORDER BY data_richiesta DESC")
+
+    rows = g.db.fetchall()
+
+    data = []
+    for row in rows:
+        r = dict(row)
+        if r.get("data_richiesta"):
+            r["data_richiesta"] = r["data_richiesta"].isoformat()
+        if r.get("orario_arrivo"):
+            r["orario_arrivo"] = r["orario_arrivo"].isoformat()
+        data.append(r)
+
+    return jsonify({"success": True, "count": len(data), "data": data}), 200
+
+
+@bp.get("/<int:richiesta_id>")
+def get_single_request(richiesta_id):
+    g.db.execute("SELECT * FROM Richiesta_Soccorso WHERE id = %s", (richiesta_id,))
+    row = g.db.fetchone()
+    if not row:
+        return jsonify({"error": "NOT_FOUND", "message": "Richiesta non trovata"}), 404
+
+    r = dict(row)
+    if r.get("data_richiesta"):
+        r["data_richiesta"] = r["data_richiesta"].isoformat()
+    if r.get("orario_arrivo"):
+        r["orario_arrivo"] = r["orario_arrivo"].isoformat()
+
+    return jsonify(r), 200

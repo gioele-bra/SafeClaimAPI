@@ -1,15 +1,11 @@
-from flask import Blueprint, jsonify, request
-from ..services.token_service import issue_token
+from flask import Blueprint, jsonify
 
 bp = Blueprint("common", __name__)
 
-@bp.post("/")
-def method():
-    data = request.get_json(silent=True) or {}
-    username = (data.get("username") or "").strip()
+# TODO: Endpoint comuni di supporto.
+# L'emissione token è delegata a Keycloak.
 
-    if not username:
-        return jsonify({"error": "BAD_REQUEST", "message": "username obbligatorio"}), 400
 
-    token = issue_token(username)
-    return jsonify({"access_token": token, "token_type": "bearer"})
+@bp.get("/health")
+def health():
+    return jsonify({"status": "ok"}), 200

@@ -1,79 +1,58 @@
-from flask import Blueprint, jsonify, request
-import uuid 
+from flask import Blueprint, jsonify, request, g
 
 bp = Blueprint("users_admin", __name__)
 
-# ==========================================
-# MOCK DATABASE
-# ==========================================
-MOCK_USERS = [
-    {"id": "0", "username": "Giovanni", "email": "giovanni@email.com", "nome": "Giovanni", "cognome": "Rossi", "attivo": "True", "telefono": "123456", "ruolo": ["automobilista", "officina"]},
-    {"id": "1", "username": "Mario", "email": "mario@email.com", "nome": "Mario", "cognome": "Verdi", "attivo": "True", "telefono": "123456", "ruolo": ["automobilista"]},
-    {"id": "2", "username": "Luigi", "email": "luigi@email.com", "nome": "Luigi", "cognome": "Neri", "attivo": "False", "telefono": "123456", "ruolo": ["officina"]},
-    {"id": "3", "username": "Anna", "email": "anna@email.com", "nome": "Anna", "cognome": "Bianchi", "attivo": "True", "telefono": "123456", "ruolo": ["automobilista"]},
-    {"id": "4", "username": "Paola", "email": "paola@email.com", "nome": "Paola", "cognome": "Gialli", "attivo": "True", "telefono": "123456", "ruolo": ["admin"]}
-]
 
-# =========================
-# GET tutti utenti
-# =========================
+def _format_user(row):
+    """Formatta una riga Utente per la risposta JSON."""
+    user = dict(row)
+    user.pop("password_hash", None)
+    if isinstance(user.get("ruolo"), str):
+        user["ruolo"] = user["ruolo"].split(",") if user["ruolo"] else []
+    if user.get("data_registrazione"):
+        user["data_registrazione"] = user["data_registrazione"].isoformat()
+    return user
+
+
 @bp.get("/")
 def list_users():
-    return jsonify(MOCK_USERS), 200
+    g.db.execute("SELECT * FROM Utente")
+    rows = g.db.fetchall()
+    return jsonify([_format_user(r) for r in rows]), 200
 
-# =========================
-# GET conteggio utenti (Totali e Attivi)
-# =========================
+
 @bp.get("/count")
 def count_all_users():
-    try:
-        totale = len(MOCK_USERS)
-        attivi = sum(1 for user in MOCK_USERS if user.get("attivo") == "True")
+    g.db.execute("SELECT COUNT(*) AS totale FROM Utente")
+    totale = g.db.fetchone()["totale"]
+    return jsonify({"total_users": totale}), 200
 
-        return jsonify({
-            "total_users": totale,
-            "active_users": attivi
-        }), 200
-    except Exception as e:
-        return jsonify({
-            "error": "INTERNAL_SERVER_ERROR", 
-            "message": f"Errore durante il conteggio: {str(e)}"
-        }), 500
 
-# ==========================================
-# 📊 NUOVA API: REPORT RUOLI (CONTEGGIO)
-# ==========================================
 @bp.get("/roles-report")
 def get_roles_report():
-    """Restituisce tutti i ruoli con il relativo numero di utenti"""
-    try:
-        report = {}
-        # Estraiamo tutti i ruoli presenti
-        for user in MOCK_USERS:
-            for r in user.get("ruolo", []):
-                r_clean = r.lower()
-                report[r_clean] = report.get(r_clean, 0) + 1
-        
-        return jsonify({
-            "status": "success",
-            "roles_count": report
-        }), 200
-    except Exception as e:
-        return jsonify({"error": "REPORT_ERROR", "message": str(e)}), 500
+    """Conta quanti utenti hanno ciascun ruolo (il SET può contenere più valori)."""
+    g.db.execute("SELECT ruolo FROM Utente")
+    rows = g.db.fetchall()
 
-# =========================
-# GET singolo utente
-# =========================
-@bp.get("/<user_id>")
+    report = {}
+    for row in rows:
+        ruoli = row["ruolo"].split(",") if row["ruolo"] else []
+        for r in ruoli:
+            r = r.strip().lower()
+            report[r] = report.get(r, 0) + 1
+
+    return jsonify({"status": "success", "roles_count": report}), 200
+
+
+@bp.get("/<int:user_id>")
 def get_user(user_id):
-    for user in MOCK_USERS:
-        if user["id"] == str(user_id):
-            return jsonify(user), 200
-    return jsonify({"error": "NOT_FOUND", "message": "Utente non trovato"}), 404
+    g.db.execute("SELECT * FROM Utente WHERE id = %s", (user_id,))
+    row = g.db.fetchone()
+    if not row:
+        return jsonify({"error": "NOT_FOUND", "message": "Utente non trovato"}), 404
+    return jsonify(_format_user(row)), 200
 
-# =========================
-# CREA utente
-# =========================
+
 @bp.post("/")
 def create_user():
     data = request.get_json(silent=True) or {}
@@ -81,40 +60,62 @@ def create_user():
     cognome = (data.get("cognome") or "").strip()
     email = (data.get("email") or "").strip()
     telefono = (data.get("telefono") or "").strip()
+    password = (data.get("password") or "").strip()
+    ruolo = data.get("ruolo", "automobilista")
 
-    if not nome or not cognome or not email or not telefono:
+    if not nome or not cognome or not email or not password:
         return jsonify({
             "error": "BAD_REQUEST",
-            "message": "nome, cognome, email e telefono sono obbligatori"
+            "message": "nome, cognome, email e password sono obbligatori"
         }), 400
 
-    if any(u["email"] == email for u in MOCK_USERS):
-        return jsonify({"error": "BAD_REQUEST", "message": "Email già registrata"}), 400
+    from werkzeug.security import generate_password_hash
+    pwd_hash = generate_password_hash(password)
 
-    nuovo_utente = {
-        "id": str(uuid.uuid4())[:8],
-        "username": nome,
-        "nome": nome,
-        "cognome": cognome,
-        "email": email,
-        "telefono": telefono,
-        "attivo": "True",
-        "ruolo": data.get("roles", [])
-    }
-    MOCK_USERS.append(nuovo_utente)
-    return jsonify(nuovo_utente), 201
+    try:
+        g.db.execute(
+            "INSERT INTO Utente (nome, cognome, email, telefono, password_hash, ruolo) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
+            (nome, cognome, email, telefono or None, pwd_hash, ruolo)
+        )
+        new_id = g.db.lastrowid
+    except Exception as e:
+        if "Duplicate entry" in str(e):
+            return jsonify({"error": "BAD_REQUEST", "message": "Email già registrata"}), 400
+        raise
 
-# =========================
-# MODIFICA utente (NO RUOLI)
-# =========================
-@bp.put("/<user_id>")
+    g.db.execute("SELECT * FROM Utente WHERE id = %s", (new_id,))
+    return jsonify(_format_user(g.db.fetchone())), 201
+
+
+@bp.put("/<int:user_id>")
 def update_user(user_id):
     data = request.get_json(silent=True) or {}
-    for user in MOCK_USERS:
-        if user["id"] == str(user_id):
-            user["nome"] = data.get("nome", user["nome"])
-            user["cognome"] = data.get("cognome", user["cognome"])
-            user["email"] = data.get("email", user["email"])
-            user["telefono"] = data.get("telefono", user.get("telefono", ""))
-            return jsonify(user), 200
-    return jsonify({"error": "NOT_FOUND", "message": "Utente non trovato"}), 404
+
+    g.db.execute("SELECT * FROM Utente WHERE id = %s", (user_id,))
+    if not g.db.fetchone():
+        return jsonify({"error": "NOT_FOUND", "message": "Utente non trovato"}), 404
+
+    fields = []
+    values = []
+    for col in ("nome", "cognome", "email", "telefono"):
+        if col in data:
+            fields.append(f"{col} = %s")
+            values.append(data[col])
+
+    if not fields:
+        return jsonify({"error": "BAD_REQUEST", "message": "Nessun campo da aggiornare"}), 400
+
+    values.append(user_id)
+    g.db.execute(f"UPDATE Utente SET {', '.join(fields)} WHERE id = %s", tuple(values))
+
+    g.db.execute("SELECT * FROM Utente WHERE id = %s", (user_id,))
+    return jsonify(_format_user(g.db.fetchone())), 200
+
+
+@bp.delete("/<int:user_id>")
+def delete_user(user_id):
+    g.db.execute("DELETE FROM Utente WHERE id = %s", (user_id,))
+    if g.db.rowcount == 0:
+        return jsonify({"error": "NOT_FOUND", "message": "Utente non trovato"}), 404
+    return jsonify({"message": f"Utente {user_id} eliminato con successo"}), 200
