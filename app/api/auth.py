@@ -27,7 +27,7 @@ def login():
     if not user:
         return jsonify({"error": "UNAUTHORIZED", "message": "Credenziali non valide"}), 401
 
-    ruoli = user["ruolo"].split(",") if user["ruolo"] else []
+    ruoli = list(user["ruolo"]) if user["ruolo"] else []
 
     return jsonify({
         "message": "Login OK (mock)",
