@@ -255,6 +255,187 @@ SECTIONS = [
         ],
     },
     {
+        "name": "Dashboard Soccorso",
+        "prefix": "/api/dashboard",
+        "description": "Endpoint per la dashboard del soccorso (KPI, richieste e stato operativo)",
+        "endpoints": [
+            {
+                "method": "GET",
+                "path": "/api/dashboard/summary",
+                "description": "Recupera il sommario della dashboard (nome officina, KPI e ID richiesta selezionata)",
+                "response_example": {
+                    "data": {
+                        "workshop_name": "Officina Centrale",
+                        "operativo_online": True,
+                        "kpi": {
+                            "richieste_attive": 2,
+                            "completati_oggi": 1,
+                            "tempo_medio_minuti": 34
+                        },
+                        "selected_request_id": "SOS-2491"
+                    }
+                },
+            },
+            {
+                "method": "GET",
+                "path": "/api/dashboard/requests",
+                "description": "Lista tutte le richieste visibili in dashboard",
+                "response_example": {
+                    "count": 3,
+                    "data": [
+                        {
+                            "id": "SOS-2491",
+                            "vehicle_type": "Furgone",
+                            "vehicle_label": "Fiat Ducato",
+                            "cliente": "Mario Rossi",
+                            "posizione": "Milano Centrale",
+                            "lat": 45.4841,
+                            "lng": 9.2043,
+                            "status": "pending",
+                            "status_text": "In attesa di presa in carico",
+                            "available_actions": ["take_in_charge", "reject"]
+                        }
+                    ]
+                },
+            },
+            {
+                "method": "PATCH",
+                "path": "/api/dashboard/operational-status",
+                "description": "Aggiorna lo stato di disponibilità (online/offline) dell'officina",
+                "request_body": {
+                    "operativo_online": {"type": "boolean", "required": True, "description": "Nuovo stato operativo"}
+                },
+                "response_example": {
+                    "message": "Stato operativo aggiornato",
+                    "data": {
+                        "workshop_name": "Officina Centrale",
+                        "operativo_online": False,
+                        "kpi": {"richieste_attive": 2, "completati_oggi": 1, "tempo_medio_minuti": 34},
+                        "selected_request_id": "SOS-2491"
+                    }
+                },
+                "errors": {"400": "Il campo 'operativo_online' deve essere booleano"},
+            },
+        ],
+    },
+    {
+        "name": "Dettaglio Intervento",
+        "prefix": "/api/dettaglioIntervento",
+        "description": "Dettaglio intervento e azioni operative usate dal frontend soccorso",
+        "endpoints": [
+            {
+                "method": "GET",
+                "path": "/api/dettaglioIntervento/&lt;request_id&gt;",
+                "description": "Recupera il dettaglio di un intervento specifico",
+                "response_example": {
+                    "data": {
+                        "id": "SOS-2491",
+                        "cliente": "Mario Rossi",
+                        "vehicle_type": "Furgone",
+                        "vehicle_label": "Fiat Ducato",
+                        "status": "pending",
+                        "status_text": "In attesa di presa in carico",
+                        "lat": 45.4841,
+                        "lng": 9.2043,
+                        "posizione": "Milano Centrale",
+                        "requested_at": "2026-04-10T08:45:00",
+                        "assigned_driver": None,
+                        "notes": "Veicolo fermo per guasto elettrico. Cliente in attesa sul posto.",
+                        "available_actions": ["take_in_charge", "reject"]
+                    }
+                },
+                "errors": {"404": "Intervento non trovato"},
+            },
+            {
+                "method": "POST",
+                "path": "/api/dettaglioIntervento/&lt;request_id&gt;/take-in-charge",
+                "description": "Prende in carico un intervento in stato pending",
+                "request_body": {},
+                "response_example": {
+                    "message": "Intervento preso in carico con successo",
+                    "request_id": "SOS-2491",
+                    "new_status": "accepted",
+                    "data": {
+                        "id": "SOS-2491",
+                        "cliente": "Mario Rossi",
+                        "vehicle_type": "Furgone",
+                        "status": "accepted",
+                        "status_text": "Intervento assegnato",
+                        "lat": 45.4841,
+                        "lng": 9.2043,
+                        "posizione": "Milano Centrale",
+                        "requested_at": "2026-04-10T08:45:00",
+                        "assigned_driver": "Officina Centrale",
+                        "notes": "Veicolo fermo per guasto elettrico. Cliente in attesa sul posto.",
+                        "available_actions": ["complete", "reject"]
+                    }
+                },
+                "errors": {
+                    "404": "Intervento non trovato",
+                    "409": "Azione non disponibile per lo stato corrente",
+                },
+            },
+            {
+                "method": "POST",
+                "path": "/api/dettaglioIntervento/&lt;request_id&gt;/reject",
+                "description": "Rifiuta un intervento in stato pending o accepted",
+                "request_body": {},
+                "response_example": {
+                    "message": "Intervento rifiutato con successo",
+                    "request_id": "SOS-2491",
+                    "new_status": "rejected",
+                    "data": {
+                        "id": "SOS-2491",
+                        "cliente": "Mario Rossi",
+                        "vehicle_type": "Furgone",
+                        "status": "rejected",
+                        "status_text": "Intervento rifiutato",
+                        "lat": 45.4841,
+                        "lng": 9.2043,
+                        "posizione": "Milano Centrale",
+                        "requested_at": "2026-04-10T08:45:00",
+                        "assigned_driver": None,
+                        "notes": "Veicolo fermo per guasto elettrico. Cliente in attesa sul posto.",
+                        "available_actions": []
+                    }
+                },
+                "errors": {
+                    "404": "Intervento non trovato",
+                    "409": "Azione non disponibile per lo stato corrente",
+                },
+            },
+            {
+                "method": "POST",
+                "path": "/api/dettaglioIntervento/&lt;request_id&gt;/complete",
+                "description": "Completa un intervento in stato accepted",
+                "request_body": {},
+                "response_example": {
+                    "message": "Intervento completato con successo",
+                    "request_id": "SOS-2492",
+                    "new_status": "handled",
+                    "data": {
+                        "id": "SOS-2492",
+                        "cliente": "Anna Bianchi",
+                        "vehicle_type": "SUV",
+                        "status": "handled",
+                        "status_text": "Intervento completato",
+                        "lat": 45.4517,
+                        "lng": 9.1765,
+                        "posizione": "Navigli",
+                        "requested_at": "2026-04-10T09:10:00",
+                        "assigned_driver": "Officina Centrale",
+                        "notes": "Richiesto traino verso officina convenzionata.",
+                        "available_actions": []
+                    }
+                },
+                "errors": {
+                    "404": "Intervento non trovato",
+                    "409": "Azione non disponibile per lo stato corrente",
+                },
+            },
+        ],
+    },
+    {
         "name": "Documentazione",
         "prefix": "/documentation",
         "description": "Questo endpoint",
