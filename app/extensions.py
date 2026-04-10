@@ -18,7 +18,7 @@ def init_mysql(app):
 
     _pool = MySQLConnectionPool(
         pool_name="safeclaim",
-        pool_size=5,
+        pool_size=2,
         host=cfg["MYSQL_HOST"],
         port=cfg["MYSQL_PORT"],
         user=cfg["MYSQL_USERNAME"],
