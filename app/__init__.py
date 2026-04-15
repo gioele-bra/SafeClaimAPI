@@ -16,6 +16,14 @@ def create_app():
     register_error_handlers(app)
     register_blueprints(app)
 
+    import atexit
+    from .services.mysql_service import MySQLService
+
+    @atexit.register
+    def close_db_connection():
+        """Chiude la connessione a MySQL quando il processo dell'app termina."""
+        MySQLService().close()
+
     @app.get("/")
     def index():
         return jsonify({"name": "SafeClaim API", "status": "ok"})
