@@ -1,8 +1,13 @@
 import mysql.connector
 from flask_cors import CORS
 from flask import g
+from pymongo import MongoClient
 
 cors = CORS()
+
+def get_mongo_db(app):
+    client = MongoClient(app.config["MONGO_URI"])
+    return client[app.config["MONGO_DB"]]
 
 def init_mysql(app):
     cfg = app.config

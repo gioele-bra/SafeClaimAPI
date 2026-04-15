@@ -1,39 +1,55 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, current_app
+from bson import json_util
+import json
+from pymongo import MongoClient
 
 bp = Blueprint("richieste", __name__)
 
-# Dizionario locale che simula il Database
-MOCK_DATA = [
-    {"id": 1, "datetime": "2024-05-20 10:30:00", "status": "Da gestire"},
-    {"id": 2, "datetime": "2024-05-21 11:00:00", "status": "In corso"},
-    {"id": 3, "datetime": "2024-05-21 14:20:00", "status": "Completate"},
-    {"id": 4, "datetime": "2024-05-22 09:15:00", "status": "Da gestire"}
-]
+def get_db():
+    # Recuperiamo il database usando l'URI e il nome DB nel config
+    client = MongoClient(current_app.config["MONGODB_URI"])
+    return client[current_app.config["MONGODB_DB"]]
 
 @bp.get("/")
 def get_requests():
-    # Recuperiamo il parametro 'status' dalla query string (es: ?status=In corso)
+    db = get_db()
+    collection = db["Proto_Intervento_SC"]
+
+    # 1. Recuperiamo il parametro dalla query string
     status_filter = request.args.get("status")
 
-    # Se il filtro è presente e non è "Tutte", filtriamo la lista
-    if status_filter and status_filter != "Tutte":
-        # Validazione base per gli stati ammessi
-        valid_statuses = ["Da gestire", "In corso", "Completate"]
-        
-        if status_filter not in valid_statuses:
-            return jsonify({
-                "error": "BAD_REQUEST",
-                "message": f"Stato '{status_filter}' non valido. "
-                           f"Valori ammessi: {', '.join(sorted(VALID_STATUSES))}"
-            }), 400
-            
-        filtered_data = [r for r in MOCK_DATA if r["status"] == status_filter]
-    else:
-        # Se status è None o "Tutte", restituiamo tutto
-        filtered_data = MOCK_DATA
+    # 2. Costruiamo la query per MongoDB
+    query = {}
+   
+    # Mappa i nomi "belli" dell'UI con i valori reali sul DB (visti nello screenshot)
+    # Esempio: ?status=In corso -> cerca "in_corso"
+    status_mapping = {
+        "In corso": "in_corso",
+        "Completate": "completato",
+        "Da gestire": "da_gestire"
+    }
 
-    return jsonify({
-        "success": True,
-        "count": len(filtered_data),
-        "data": filtered_data
-    }), 200
+    if status_filter and status_filter != "Tutte":
+        db_status = status_mapping.get(status_filter, status_filter)
+        query["stato"] = db_status
+
+    try:
+        # 3. Eseguiamo la query
+        # .find(query) restituisce un cursore
+        cursor = collection.find(query)
+       
+        # Trasformiamo il cursore in una lista
+        # Usiamo json_util per gestire i tipi speciali di Mongo come l'ObjectId
+        data = json.loads(json_util.dumps(list(cursor)))
+
+        return jsonify({
+            "success": True,
+            "count": len(data),
+            "data": data
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
