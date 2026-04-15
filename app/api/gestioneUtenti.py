@@ -6,11 +6,15 @@ VALID_ROLES = {"admin", "automobilista", "perito", "officina", "assicuratore", "
 
 
 def _format_user(row):
-    """Formatta una riga Utente per la risposta JSON."""
     user = dict(row)
     user.pop("password_hash", None)
-    if isinstance(user.get("ruolo"), str):
-        user["ruolo"] = user["ruolo"].split(",") if user["ruolo"] else []
+    ruolo = user.get("ruolo")
+    if isinstance(ruolo, set):
+        user["ruolo"] = list(ruolo)
+    elif isinstance(ruolo, str):
+        user["ruolo"] = ruolo.split(",") if ruolo else []
+    else:
+        user["ruolo"] = []
     if user.get("data_registrazione"):
         user["data_registrazione"] = user["data_registrazione"].isoformat()
     return user

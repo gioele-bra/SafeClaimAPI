@@ -7,6 +7,8 @@ from .creazioneUtenti import bp as creazioneUtenti_bp
 from .richieste import bp as richieste_bp
 from .dashboard import bp as dashboard_bp
 from .dettagliointervento import bp as dettagliointervento_bp
+from .impostazioni import bp as impostazioni_bp
+
 from .documentation import bp as documentation_bp
 
 def register_blueprints(app):
