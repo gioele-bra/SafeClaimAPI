@@ -9,6 +9,7 @@ from .dashboard import bp as dashboard_bp
 from .dettagliointervento import bp as dettagliointervento_bp
 from .impostazioni import bp as impostazioni_bp
 from .flotta import bp as flotta_bp
+from .analytics import bp as analytics_bp
 
 from .documentation import bp as documentation_bp
 
@@ -24,5 +25,6 @@ def register_blueprints(app):
     app.register_blueprint(dettagliointervento_bp, url_prefix="/api/dettaglioIntervento")
     app.register_blueprint(impostazioni_bp, url_prefix="/api/impostazioni")
     app.register_blueprint(flotta_bp, url_prefix="/api/flotta")
+    app.register_blueprint(analytics_bp, url_prefix="/api/analytics")
 
     app.register_blueprint(documentation_bp, url_prefix="/documentation")
