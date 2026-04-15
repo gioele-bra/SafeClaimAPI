@@ -19,6 +19,7 @@ def register_blueprints(app):
     app.register_blueprint(richieste_bp, url_prefix="/api/richieste")
     app.register_blueprint(dashboard_bp, url_prefix="/api/dashboard")
     app.register_blueprint(dettagliointervento_bp, url_prefix="/api/dettaglioIntervento")
+    app.register_blueprint(impostazioni_bp, url_prefix="/api/impostazioni")
 
 
     app.register_blueprint(documentation_bp, url_prefix="/documentation")
