@@ -436,6 +436,244 @@ SECTIONS = [
         ],
     },
     {
+        "name": "Impostazioni",
+        "prefix": "/api/impostazioni",
+        "description": "Gestione impostazioni officina (profilo, notifiche, parametri operativi)",
+        "endpoints": [
+            {
+                "method": "GET",
+                "path": "/api/impostazioni/",
+                "description": "Recupera tutte le impostazioni (profilo, officina, notifiche, parametri operativi)",
+                "response_example": {
+                    "status": "success",
+                    "data": {
+                        "profilo": {
+                            "nome": "Officina Centrale",
+                            "email_contatto": "officina@example.com",
+                            "telefono_contatto": "02 1234567",
+                            "avatar_url": "https://...",
+                        },
+                        "officina": {
+                            "email": "officina@example.com",
+                            "telefono": "+39 02 1234567",
+                            "indirizzo": "Via Roma 123, Milano",
+                        },
+                        "notifiche": {"push": True, "email": True, "sms": False},
+                        "parametri_operativi": {
+                            "orario_inizio": "08:00",
+                            "orario_fine": "20:00",
+                            "max_coda": 10,
+                            "accettazione_automatica": False,
+                        },
+                    },
+                },
+            },
+            {
+                "method": "PATCH",
+                "path": "/api/impostazioni/profilo",
+                "description": "Aggiorna i dati del profilo dell'officina",
+                "request_body": {
+                    "nome": {"type": "string", "required": False},
+                    "email_contatto": {"type": "string", "required": False},
+                    "telefono_contatto": {"type": "string", "required": False},
+                    "avatar_url": {"type": "string", "required": False},
+                },
+                "response_example": {
+                    "message": "Profilo aggiornato con successo",
+                    "data": {
+                        "nome": "Officina Centrale",
+                        "email_contatto": "officina@example.com",
+                        "telefono_contatto": "02 1234567",
+                        "avatar_url": "https://...",
+                    },
+                },
+                "errors": {"400": "Payload mancante"},
+            },
+            {
+                "method": "PATCH",
+                "path": "/api/impostazioni/notifiche",
+                "description": "Aggiorna le preferenze di notifica (tutti i valori devono essere booleani)",
+                "request_body": {
+                    "push": {"type": "boolean", "required": False},
+                    "email": {"type": "boolean", "required": False},
+                    "sms": {"type": "boolean", "required": False},
+                },
+                "response_example": {
+                    "message": "Preferenze notifiche salvate",
+                    "data": {"push": True, "email": True, "sms": False},
+                },
+                "errors": {"400": "Il campo {key} deve essere booleano"},
+            },
+            {
+                "method": "PATCH",
+                "path": "/api/impostazioni/parametri-operativi",
+                "description": "Aggiorna i parametri operativi dell'officina",
+                "request_body": {
+                    "orario_inizio": {"type": "string", "required": False, "description": "Formato HH:MM"},
+                    "orario_fine": {"type": "string", "required": False, "description": "Formato HH:MM"},
+                    "max_coda": {"type": "integer", "required": False},
+                    "accettazione_automatica": {"type": "boolean", "required": False},
+                },
+                "response_example": {
+                    "message": "Parametri operativi aggiornati",
+                    "data": {
+                        "orario_inizio": "08:00",
+                        "orario_fine": "20:00",
+                        "max_coda": 10,
+                        "accettazione_automatica": False,
+                    },
+                },
+                "errors": {"400": "max_coda deve essere un intero"},
+            },
+        ],
+    },
+    {
+        "name": "Flotta",
+        "prefix": "/api/flotta",
+        "description": "Gestione flotta veicoli e contatto autisti",
+        "endpoints": [
+            {
+                "method": "GET",
+                "path": "/api/flotta/",
+                "description": "Ritorna la lista completa dei veicoli (ordinati per nome)",
+                "response_example": [
+                    {"id": 1, "name": "Fiat Ducato", "targa": "AB123CD", "status": "available"}
+                ],
+                "errors": {"500": "Errore nel recupero della flotta"},
+            },
+            {
+                "method": "GET",
+                "path": "/api/flotta/&lt;vehicle_id&gt;",
+                "description": "Dettaglio singolo veicolo per ID",
+                "response_example": {"id": 1, "name": "Fiat Ducato", "targa": "AB123CD", "status": "available"},
+                "errors": {
+                    "404": "Veicolo con ID {vehicle_id} non trovato",
+                    "500": "Errore durante la ricerca del veicolo",
+                },
+            },
+            {
+                "method": "POST",
+                "path": "/api/flotta/contact",
+                "description": "Inoltra una richiesta di contatto verso un autista",
+                "request_body": {
+                    "driver": {"type": "string", "required": True, "description": "Nome dell'autista da contattare"},
+                },
+                "response_example": {
+                    "status": "success",
+                    "message": "Chiamata a Mario Rossi inoltrata correttamente",
+                    "timestamp": "b1e2c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
+                },
+                "errors": {
+                    "400": "Dati mancanti: specificare il nome dell'autista",
+                    "500": "Errore durante l'invio della chiamata",
+                },
+            },
+        ],
+    },
+    {
+        "name": "Analytics",
+        "prefix": "/api/analytics",
+        "description": "KPI, statistiche richieste, stato flotta, recensioni e traffico live (mock)",
+        "endpoints": [
+            {
+                "method": "GET",
+                "path": "/api/analytics/total-requests",
+                "description": "Numero totale di richieste gestite",
+                "response_example": {"total": 1250},
+                "errors": {"500": "Errore nel recupero delle richieste totali"},
+            },
+            {
+                "method": "GET",
+                "path": "/api/analytics/pending",
+                "description": "Numero di richieste attualmente in attesa",
+                "response_example": {"pending": 325},
+                "errors": {"500": "Errore nel recupero delle richieste in attesa"},
+            },
+            {
+                "method": "GET",
+                "path": "/api/analytics/accepted",
+                "description": "Numero di richieste in corso (accettate)",
+                "response_example": {"accepted": 350},
+                "errors": {"500": "Errore nel recupero delle richieste in corso"},
+            },
+            {
+                "method": "GET",
+                "path": "/api/analytics/handled",
+                "description": "Numero di richieste completate",
+                "response_example": {"handled": 1085},
+                "errors": {"500": "Errore nel recupero delle richieste completate"},
+            },
+            {
+                "method": "GET",
+                "path": "/api/analytics/requests-last-days/&lt;days&gt;",
+                "description": "Serie temporale del numero di richieste negli ultimi N giorni (max 7 giorni di dati mock)",
+                "response_example": {"days": 7, "data": [120, 145, 132, 150, 110, 160, 140]},
+                "errors": {
+                    "400": "Giorni deve essere tra 1 e 365",
+                    "500": "Errore nel recupero dati ultimi giorni",
+                },
+            },
+            {
+                "method": "GET",
+                "path": "/api/analytics/fleet-status",
+                "description": "Stato attuale della flotta (disponibili, occupati, in manutenzione)",
+                "response_example": {"available": 12, "busy": 8, "maintenance": 3},
+                "errors": {"500": "Errore nel recupero dello stato flotta"},
+            },
+            {
+                "method": "GET",
+                "path": "/api/analytics/average-handling-time",
+                "description": "Tempo medio di gestione di una richiesta (in minuti)",
+                "response_example": {"average_minutes": 34},
+                "errors": {"500": "Errore nel recupero del tempo medio gestione"},
+            },
+            {
+                "method": "GET",
+                "path": "/api/analytics/average-rating",
+                "description": "Valutazione media del servizio (scala 1-5)",
+                "response_example": {"average_rating": 4.25},
+                "errors": {"500": "Errore nel recupero della valutazione media"},
+            },
+            {
+                "method": "GET",
+                "path": "/api/analytics/reviews",
+                "description": "Lista delle recensioni recenti degli utenti",
+                "response_example": {
+                    "reviews": [
+                        {
+                            "id": "b1e2c3d4-...",
+                            "author": "Mario R.",
+                            "rating": 5,
+                            "comment": "Servizio rapidissimo.",
+                            "date": "2026-04-13T10:00:00",
+                        }
+                    ],
+                    "count": 4,
+                },
+                "errors": {"500": "Errore nel recupero delle recensioni"},
+            },
+            {
+                "method": "GET",
+                "path": "/api/analytics/traffic/&lt;city&gt;",
+                "description": "Segnalazioni traffico/incidenti per la citt&agrave; indicata (lista vuota se non disponibile)",
+                "response_example": {
+                    "city": "Milano",
+                    "incidents": [
+                        {
+                            "id": "b1e2c3d4-...",
+                            "title": "Incidente in tangenziale Est a Milano, code di 4 km",
+                            "source": "Ansa",
+                            "pubDate": "2026-04-15T09:45:00",
+                            "link": "https://example.com/1",
+                        }
+                    ],
+                    "count": 5,
+                },
+                "errors": {"500": "Errore nel recupero del traffico"},
+            },
+        ],
+    },
+    {
         "name": "Documentazione",
         "prefix": "/documentation",
         "description": "Questo endpoint",
