@@ -81,7 +81,6 @@ except ImportError:
 
 bp = Blueprint("dashboard", __name__)
 
-
 @bp.get("/summary")
 def get_summary():
     summary = get_dashboard_summary()
