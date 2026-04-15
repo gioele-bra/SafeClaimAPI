@@ -6,6 +6,7 @@ from .gestioneUtenti import bp as gestioneUtenti_bp
 from .creazioneUtenti import bp as creazioneUtenti_bp
 from .richieste import bp as richieste_bp
 from .dashboard import bp as dashboard_bp
+from .homeAdmin import bp as home_admin_bp
 from .dettagliointervento import bp as dettagliointervento_bp
 from .impostazioni import bp as impostazioni_bp
 from .flotta import bp as flotta_bp
@@ -22,6 +23,7 @@ def register_blueprints(app):
     app.register_blueprint(creazioneUtenti_bp, url_prefix="/api/creazioneUtenti")
     app.register_blueprint(richieste_bp, url_prefix="/api/richieste")
     app.register_blueprint(dashboard_bp, url_prefix="/api/dashboard")
+    app.register_blueprint(home_admin_bp, url_prefix="/api/home-admin")
     app.register_blueprint(dettagliointervento_bp, url_prefix="/api/dettaglioIntervento")
     app.register_blueprint(impostazioni_bp, url_prefix="/api/impostazioni")
     app.register_blueprint(flotta_bp, url_prefix="/api/flotta")

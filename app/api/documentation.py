@@ -319,6 +319,81 @@ SECTIONS = [
         ],
     },
     {
+        "name": "Home Admin",
+        "prefix": "/api/home-admin",
+        "description": "Endpoint per la dashboard principale dell'amministratore",
+        "endpoints": [
+            {
+                "method": "GET",
+                "path": "/api/home-admin/stats-ruoli",
+                "description": "Recupera il conteggio reale degli utenti per ogni ruolo",
+                "response_example": {
+                    "status": "success",
+                    "data": {"Perito": 24, "Admin": 5, "Automobilista": 120}
+                },
+            },
+            {
+                "method": "GET",
+                "path": "/api/home-admin/notifiche/recenti",
+                "description": "Recupera le ultime notifiche di sistema",
+                "response_example": {
+                    "status": "success",
+                    "data": [
+                        {
+                            "id": 1,
+                            "tipo": "registrazione",
+                            "messaggio": "Nuovo utente registrato: Mario Rossi",
+                            "data": "2026-04-15T10:00:00",
+                            "letta": False
+                        }
+                    ]
+                },
+            },
+            {
+                "method": "GET",
+                "path": "/api/home-admin/utenti",
+                "description": "Ricerca utenti con paginazione lato server",
+                "query_params": {
+                    "search": {"type": "string", "required": False, "description": "Filtro di ricerca (nome, cognome, email)"},
+                    "page": {"type": "integer", "required": False, "default": 1},
+                    "per_page": {"type": "integer", "required": False, "default": 10}
+                },
+                "response_example": {
+                    "status": "success",
+                    "data": [{"id": 1, "nome": "Mario", "cognome": "Rossi", "email": "mario@example.com"}],
+                    "pagination": {"total": 125, "page": 1, "per_page": 10, "total_pages": 13}
+                },
+            },
+            {
+                "method": "GET",
+                "path": "/api/home-admin/audit-logs",
+                "description": "Recupera gli ultimi log di attività del sistema",
+                "response_example": {
+                    "status": "success",
+                    "data": [{"id": 1, "utente": "Admin", "azione": "Accesso effettuato", "timestamp": "2026-04-15T08:00:00"}]
+                },
+            },
+            {
+                "method": "GET",
+                "path": "/api/home-admin/status",
+                "description": "Recupera lo stato di salute dei servizi di sistema",
+                "response_example": {
+                    "status": "success",
+                    "data": {"database": "online", "auth_provider": "online"}
+                },
+            },
+            {
+                "method": "GET",
+                "path": "/api/home-admin/me",
+                "description": "Recupera le informazioni del profilo amministratore corrente",
+                "response_example": {
+                    "status": "success",
+                    "data": {"id": 0, "nome": "Admin", "email": "admin@safeclaim.it", "ruolo": ["admin"]}
+                },
+            },
+        ],
+    },
+    {
         "name": "Dettaglio Intervento",
         "prefix": "/api/dettaglioIntervento",
         "description": "Dettaglio intervento e azioni operative usate dal frontend soccorso",
