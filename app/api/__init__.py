@@ -1,3 +1,5 @@
+from app.api import impostazioni
+
 from .soccorsi import bp as soccorsi_bp
 from .auth import bp as auth_bp
 from .admin import bp as admin_bp
@@ -25,8 +27,13 @@ def register_blueprints(app):
     app.register_blueprint(dashboard_bp, url_prefix="/api/dashboard")
     app.register_blueprint(home_admin_bp, url_prefix="/api/home-admin")
     app.register_blueprint(dettagliointervento_bp, url_prefix="/api/dettaglioIntervento")
+<<<<<<< HEAD
     app.register_blueprint(impostazioni_bp, url_prefix="/api/impostazioni")
     app.register_blueprint(flotta_bp, url_prefix="/api/flotta")
     app.register_blueprint(analytics_bp, url_prefix="/api/analytics")
+=======
+    app.register_blueprint(impostazioni, url_prefix="/api/impostazioni")
+
+>>>>>>> bd502ec (implementazione api nella pagia delle impostazioni 2)
 
     app.register_blueprint(documentation_bp, url_prefix="/documentation")

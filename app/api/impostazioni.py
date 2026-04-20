@@ -1,102 +1,159 @@
-from copy import deepcopy
-from flask import Blueprint, jsonify, request
-
-# --- MOCK DATA STORE ---
-# Inizializzato con i dati del tuo JSON
-_settings_data = {
-    "profilo": {
-        "nome": "Officina Centrale",
-        "email_contatto": "officina@example.com",
-        "telefono_contatto": "02 1234567",
-        "avatar_url": "https://..."
-    },
-    "officina": {
-        "email": "officina@example.com",
-        "telefono": "+39 02 1234567",
-        "indirizzo": "Via Roma 123, Milano"
-    },
-    "notifiche": {
-        "push": True,
-        "email": True,
-        "sms": False
-    },
-    "parametri_operativi": {
-        "orario_inizio": "08:00",
-        "orario_fine": "20:00",
-        "max_coda": 10,
-        "accettazione_automatica": False
-    }
-}
-
-def get_settings():
-    """Ritorna una copia profonda delle impostazioni correnti."""
-    return deepcopy(_settings_data)
-
-def update_settings(new_data):
-    """Esegue un merge/update semplice delle chiavi di primo livello."""
-    global _settings_data
-    for key, value in new_data.items():
-        if key in _settings_data and isinstance(_settings_data[key], dict):
-            _settings_data[key].update(value)
-        else:
-            _settings_data[key] = value
-    return get_settings()
-
-# --- BLUEPRINT DEFINITION ---
+from flask import Blueprint, jsonify, request, g
 
 bp = Blueprint("impostazioni", __name__)
 
+
+def _get_officina_id():
+    officina_id = request.args.get("officina_id", type=int)
+
+    if not officina_id:
+        return None, (
+            jsonify({
+                "error": "BAD_REQUEST",
+                "message": "Parametro officina_id mancante o non valido"
+            }),
+            400
+        )
+
+    return officina_id, None
+
+
+def _get_officina(officina_id):
+    g.db.execute("""
+        SELECT id, ragione_sociale, email, telefono, indirizzo
+        FROM Officina
+        WHERE id = %s
+    """, (officina_id,))
+    return g.db.fetchone()
+
+
 @bp.get("/")
-def get_all_settings():
-    """Endpoint per recuperare tutte le impostazioni."""
-    data = get_settings()
-    return jsonify({
-        "status": "success",
-        "data": data
-    }), 200
+def get_impostazioni():
+    try:
+        officina_id, error_response = _get_officina_id()
+        if error_response:
+            return error_response
+
+        row = _get_officina(officina_id)
+
+        if not row:
+            return jsonify({
+                "error": "NOT_FOUND",
+                "message": f"Officina con ID {officina_id} non trovata"
+            }), 404
+
+        officina = dict(row)
+
+        return jsonify({
+            "status": "success",
+            "data": {
+                "profilo": {
+                    "nome": officina.get("ragione_sociale"),
+                    "email_contatto": officina.get("email"),
+                    "telefono_contatto": officina.get("telefono"),
+                    "avatar_url": None
+                },
+                "officina": {
+                    "id": officina.get("id"),
+                    "email": officina.get("email"),
+                    "telefono": officina.get("telefono"),
+                    "indirizzo": officina.get("indirizzo")
+                },
+                "notifiche": {
+                    "push": None,
+                    "email": None,
+                    "sms": None
+                },
+                "parametri_operativi": {
+                    "orario_inizio": None,
+                    "orario_fine": None,
+                    "max_coda": None,
+                    "accettazione_automatica": None
+                }
+            }
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "error": "INTERNAL_SERVER_ERROR",
+            "message": f"Errore nel recupero delle impostazioni: {str(e)}"
+        }), 500
+
 
 @bp.patch("/profilo")
-def patch_profilo():
-    """Aggiorna solo i dati del profilo."""
-    payload = request.get_json(silent=True) or {}
-    if not payload:
-        return jsonify({"error": "BAD_REQUEST", "message": "Payload mancante"}), 400
-    
-    updated_data = update_settings({"profilo": payload})
-    return jsonify({
-        "message": "Profilo aggiornato con successo",
-        "data": updated_data["profilo"]
-    }), 200
+def update_profilo():
+    try:
+        officina_id, error_response = _get_officina_id()
+        if error_response:
+            return error_response
 
-@bp.patch("/notifiche")
-def patch_notifiche():
-    """Aggiorna le preferenze di notifica."""
-    payload = request.get_json(silent=True) or {}
-    # Validazione base per booleani
-    for key in payload:
-        if not isinstance(payload[key], bool):
+        data = request.get_json()
+
+        if not data:
             return jsonify({
-                "error": "INVALID_FORMAT",
-                "message": f"Il campo {key} deve essere booleano"
+                "error": "BAD_REQUEST",
+                "message": "Payload mancante"
             }), 400
-            
-    updated_data = update_settings({"notifiche": payload})
-    return jsonify({
-        "message": "Preferenze notifiche salvate",
-        "data": updated_data["notifiche"]
-    }), 200
 
-@bp.patch("/parametri-operativi")
-def patch_parametri():
-    """Aggiorna i parametri operativi dell'officina."""
-    payload = request.get_json(silent=True) or {}
-    
-    # Esempio di validazione specifica
-    if "max_coda" in payload and not isinstance(payload["max_coda"], int):
-        return jsonify({"error": "BAD_REQUEST", "message": "max_coda deve essere un intero"}), 400
+        row = _get_officina(officina_id)
+        if not row:
+            return jsonify({
+                "error": "NOT_FOUND",
+                "message": f"Officina con ID {officina_id} non trovata"
+            }), 404
 
-    updated_data = update_settings({"parametri_operativi": payload})
-    return jsonify({
-        "message": "Parametri operativi aggiornati",
-        "data": updated_data["parametri_operativi"]
-    }), 200
+        if "avatar_url" in data:
+            return jsonify({
+                "error": "BAD_REQUEST",
+                "message": "Il campo avatar_url non è supportato dal DB attuale"
+            }), 400
+
+        updates = []
+        values = []
+
+        if "nome" in data:
+            updates.append("ragione_sociale = %s")
+            values.append(data["nome"])
+
+        if "email_contatto" in data:
+            updates.append("email = %s")
+            values.append(data["email_contatto"])
+
+        if "telefono_contatto" in data:
+            updates.append("telefono = %s")
+            values.append(data["telefono_contatto"])
+
+        if not updates:
+            return jsonify({
+                "error": "BAD_REQUEST",
+                "message": "Nessun campo valido da aggiornare"
+            }), 400
+
+        query = f"""
+            UPDATE Officina
+            SET {', '.join(updates)}
+            WHERE id = %s
+        """
+        values.append(officina_id)
+        g.db.execute(query, tuple(values))
+        g.db.connection.commit()
+
+        row = _get_officina(officina_id)
+        officina = dict(row)
+
+        return jsonify({
+            "message": "Profilo aggiornato con successo",
+            "data": {
+                "id": officina.get("id"),
+                "nome": officina.get("ragione_sociale"),
+                "email_contatto": officina.get("email"),
+                "telefono_contatto": officina.get("telefono"),
+                "avatar_url": None
+            }
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "error": "INTERNAL_SERVER_ERROR",
+            "message": f"Errore durante l'aggiornamento del profilo: {str(e)}"
+        }), 500
