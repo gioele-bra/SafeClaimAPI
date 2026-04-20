@@ -8,8 +8,14 @@ def _format_user(row):
     """Formatta una riga Utente per la risposta JSON."""
     user = dict(row)
     user.pop("password_hash", None)
-    if isinstance(user.get("ruolo"), str):
-        user["ruolo"] = user["ruolo"].split(",") if user["ruolo"] else []
+    ruolo = user.get("ruolo")
+    if isinstance(ruolo, str):
+        user["ruolo"] = ruolo.split(",") if ruolo else []
+    elif isinstance(ruolo, (set, list)):
+        user["ruolo"] = list(ruolo)
+    else:
+        user["ruolo"] = []
+        
     if user.get("data_registrazione"):
         user["data_registrazione"] = user["data_registrazione"].isoformat()
     return user
@@ -17,16 +23,28 @@ def _format_user(row):
 
 @bp.get("/stats-ruoli")
 def get_stats_ruoli():
-    """Restituisce il conteggio reale per ogni ruolo."""
+    """Restituisce il conteggio reale per ogni ruolo con gestione tipi robusta."""
     g.db.execute("SELECT ruolo FROM Utente")
     rows = g.db.fetchall()
 
     stats = {}
     for row in rows:
-        ruoli = row["ruolo"].split(",") if row["ruolo"] else []
-        for r in ruoli:
-            r = r.strip().capitalize()  # es. Perito, Admin, etc.
-            stats[r] = stats.get(r, 0) + 1
+        ruolo_val = row.get("ruolo")
+        ruoli_list = []
+        
+        # Gestione sicura del tipo di dato (Stringa, Set o Lista)
+        if isinstance(ruolo_val, set):
+            ruoli_list = list(ruolo_val)
+        elif isinstance(ruolo_val, str):
+            ruoli_list = ruolo_val.split(",") if ruolo_val else []
+        elif isinstance(ruolo_val, list):
+            ruoli_list = ruolo_val
+            
+        # Pulizia stringhe e conteggio
+        for r in ruoli_list:
+            r_clean = str(r).strip().capitalize()
+            if r_clean:
+                stats[r_clean] = stats.get(r_clean, 0) + 1
 
     return jsonify({"status": "success", "data": stats}), 200
 
@@ -134,7 +152,6 @@ def get_system_status():
 @bp.get("/me")
 def get_admin_me():
     """Recupera il profilo dell'amministratore loggato (mock)."""
-    # In una app reale useremmo g.user o il token_service
     return jsonify({
         "status": "success",
         "data": {
