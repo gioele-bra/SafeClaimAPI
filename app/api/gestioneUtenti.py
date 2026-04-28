@@ -45,8 +45,14 @@ def get_ruoli_attivi():
     ruoli = set()
     for row in rows:
         if row["ruolo"]:
-            for r in row["ruolo"].split(","):
-                ruoli.add(r.strip().lower())
+            # Gestione sicura se è stringa o set
+            val = row["ruolo"]
+            if isinstance(val, str):
+                for r in val.split(","):
+                    ruoli.add(r.strip().lower())
+            elif isinstance(val, (set, list)):
+                for r in val:
+                    ruoli.add(str(r).strip().lower())
 
     return jsonify({"ruoli_attivi": sorted(ruoli)}), 200
 
