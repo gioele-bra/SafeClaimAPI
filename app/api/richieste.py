@@ -16,7 +16,7 @@ def get_requests():
     collection = db["Proto_Intervento_SC"]
 
     # 1. Recuperiamo il parametro dalla query string
-    status_filter = request.args.get("status")
+    status_filter = request.args.get("stato")
 
     # 2. Costruiamo la query per MongoDB
     query = {}

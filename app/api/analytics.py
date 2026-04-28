@@ -9,7 +9,7 @@ bp = Blueprint("analytics", __name__)
 # ==========================================
 
 MOCK_REQUESTS_DATA = {
-    "total": 1250,
+    "total": 1350,
     "pending": 325,
     "accepted": 350,
     "handled": 1085,
