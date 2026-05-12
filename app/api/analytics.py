@@ -1,111 +1,35 @@
-from flask import Blueprint, jsonify, request
-from datetime import datetime, timedelta
-import uuid
+from flask import Blueprint, jsonify, g
+from datetime import date, timedelta
+import re
 
 bp = Blueprint("analytics", __name__)
 
-# ==========================================
-# MOCK DATABASE - DATI ANALYTICS
-# ==========================================
 
-MOCK_REQUESTS_DATA = {
-    "total": 1350,
-    "pending": 325,
-    "accepted": 350,
-    "handled": 1085,
-    "last_7_days": [120, 145, 132, 150, 110, 160, 140],
-}
-
-MOCK_FLEET_STATUS = {
-    "available": 12,
-    "busy": 8,
-    "maintenance": 3,
-}
-
-MOCK_AVERAGE_HANDLING_TIME = 34  # minuti
-
-MOCK_AVERAGE_RATING = 4.25
-
-MOCK_REVIEWS = [
-    {
-        "id": str(uuid.uuid4()),
-        "author": "Mario R.",
-        "rating": 5,
-        "comment": "Servizio rapidissimo.",
-        "date": (datetime.now() - timedelta(days=2)).isoformat()
-    },
-    {
-        "id": str(uuid.uuid4()),
-        "author": "Anna B.",
-        "rating": 4,
-        "comment": "Attesa lunga ma risolto.",
-        "date": (datetime.now() - timedelta(days=1)).isoformat()
-    },
-    {
-        "id": str(uuid.uuid4()),
-        "author": "Giovanni M.",
-        "rating": 5,
-        "comment": "Professionali e gentili.",
-        "date": datetime.now().isoformat()
-    },
-    {
-        "id": str(uuid.uuid4()),
-        "author": "Elena S.",
-        "rating": 3,
-        "comment": "Potrebbe essere più veloce.",
-        "date": (datetime.now() - timedelta(hours=12)).isoformat()
-    },
-]
-
-MOCK_TRAFFIC_INCIDENTS = {
-    "Milano": [
-        {
-            "id": str(uuid.uuid4()),
-            "title": "Incidente in tangenziale Est a Milano, code di 4 km",
-            "source": "Ansa",
-            "pubDate": (datetime.now() - timedelta(minutes=15)).isoformat(),
-            "link": "https://example.com/1"
-        },
-        {
-            "id": str(uuid.uuid4()),
-            "title": "Code sulla A4 in direzione Como, uscita al Castellano",
-            "source": "Corriere",
-            "pubDate": (datetime.now() - timedelta(minutes=8)).isoformat(),
-            "link": "https://example.com/2"
-        },
-        {
-            "id": str(uuid.uuid4()),
-            "title": "Strada chiusa – Via di Niguarda direzione centro città blocca il traffico",
-            "source": "TMB",
-            "pubDate": (datetime.now() - timedelta(minutes=3)).isoformat(),
-            "link": "https://example.com/3"
-        },
-        {
-            "id": str(uuid.uuid4()),
-            "title": "Incidente in A1 a Milano e Corsico, 3 corsie di 6 traffico bloccato",
-            "source": "Ansa",
-            "pubDate": (datetime.now() - timedelta(minutes=25)).isoformat(),
-            "link": "https://example.com/4"
-        },
-        {
-            "id": str(uuid.uuid4()),
-            "title": "Coda sulla circonvallazione esterna, senso unico alternato",
-            "source": "Radio Lombardia",
-            "pubDate": (datetime.now() - timedelta(minutes=30)).isoformat(),
-            "link": "https://example.com/5"
-        },
-    ]
-}
+def _table_exists(table_name):
+    """Verifica se una tabella esiste nel database"""
+    try:
+        g.db.execute(
+            "SELECT COUNT(*) AS count FROM information_schema.tables "
+            "WHERE table_schema = DATABASE() AND LOWER(table_name) = LOWER(%s)",
+            (table_name,),
+        )
+        row = g.db.fetchone()
+        return row and row.get("count", 0) > 0
+    except:
+        return False
 
 # ==========================================
 # 📊 ENDPOINT: RICHIESTE TOTALI
 # ==========================================
 @bp.get("/total-requests")
 def get_total_requests():
+    """Ritorna il numero totale di richieste gestite"""
     try:
-        return jsonify({
-            "total": MOCK_REQUESTS_DATA["total"]
-        }), 200
+        g.db.execute("SELECT COUNT(*) AS count FROM Richiesta_Soccorso")
+        row = g.db.fetchone()
+        total = int(row["count"] or 0) if row else 0
+
+        return jsonify({"total": total}), 200
     except Exception as e:
         return jsonify({
             "error": "INTERNAL_SERVER_ERROR",
@@ -117,10 +41,13 @@ def get_total_requests():
 # ==========================================
 @bp.get("/pending")
 def get_pending():
+    """Ritorna il numero di richieste in attesa"""
     try:
-        return jsonify({
-            "pending": MOCK_REQUESTS_DATA["pending"]
-        }), 200
+        g.db.execute("SELECT COUNT(*) AS count FROM Richiesta_Soccorso WHERE status = %s", ("pending",))
+        row = g.db.fetchone()
+        pending = int(row["count"] or 0) if row else 0
+
+        return jsonify({"pending": pending}), 200
     except Exception as e:
         return jsonify({
             "error": "INTERNAL_SERVER_ERROR",
@@ -132,10 +59,13 @@ def get_pending():
 # ==========================================
 @bp.get("/accepted")
 def get_accepted():
+    """Ritorna il numero di richieste in corso (accettate)"""
     try:
-        return jsonify({
-            "accepted": MOCK_REQUESTS_DATA["accepted"]
-        }), 200
+        g.db.execute("SELECT COUNT(*) AS count FROM Richiesta_Soccorso WHERE status = %s", ("accepted",))
+        row = g.db.fetchone()
+        accepted = int(row["count"] or 0) if row else 0
+
+        return jsonify({"accepted": accepted}), 200
     except Exception as e:
         return jsonify({
             "error": "INTERNAL_SERVER_ERROR",
@@ -147,10 +77,13 @@ def get_accepted():
 # ==========================================
 @bp.get("/handled")
 def get_handled():
+    """Ritorna il numero di richieste completate"""
     try:
-        return jsonify({
-            "handled": MOCK_REQUESTS_DATA["handled"]
-        }), 200
+        g.db.execute("SELECT COUNT(*) AS count FROM Richiesta_Soccorso WHERE status = %s", ("handled",))
+        row = g.db.fetchone()
+        handled = int(row["count"] or 0) if row else 0
+
+        return jsonify({"handled": handled}), 200
     except Exception as e:
         return jsonify({
             "error": "INTERNAL_SERVER_ERROR",
@@ -162,20 +95,35 @@ def get_handled():
 # ==========================================
 @bp.get("/requests-last-days/<int:days>")
 def get_requests_last_days(days):
+    """Ritorna serie temporale del numero di richieste negli ultimi N giorni"""
     try:
         if days < 1 or days > 365:
             return jsonify({
                 "error": "BAD_REQUEST",
                 "message": "Giorni deve essere tra 1 e 365"
             }), 400
-        
-        # Restituisce gli ultimi giorni (limita a 7 se superiore)
-        data = MOCK_REQUESTS_DATA["last_7_days"][:days] if days <= len(MOCK_REQUESTS_DATA["last_7_days"]) else MOCK_REQUESTS_DATA["last_7_days"]
-        
-        return jsonify({
-            "days": days,
-            "data": data
-        }), 200
+
+        start_date = date.today() - timedelta(days=days - 1)
+        g.db.execute(
+            "SELECT DATE(data_richiesta) AS day, COUNT(*) AS count "
+            "FROM Richiesta_Soccorso "
+            "WHERE data_richiesta >= %s "
+            "GROUP BY day "
+            "ORDER BY day ASC",
+            (start_date,),
+        )
+        rows = g.db.fetchall() or []
+
+        counts_by_day = {
+            row["day"].isoformat(): int(row["count"] or 0) for row in rows
+        }
+
+        data = [
+            counts_by_day.get((start_date + timedelta(days=i)).isoformat(), 0)
+            for i in range(days)
+        ]
+
+        return jsonify({"days": days, "data": data}), 200
     except Exception as e:
         return jsonify({
             "error": "INTERNAL_SERVER_ERROR",
@@ -187,8 +135,18 @@ def get_requests_last_days(days):
 # ==========================================
 @bp.get("/fleet-status")
 def get_fleet_status():
+    """Ritorna lo stato attuale della flotta"""
     try:
-        return jsonify(MOCK_FLEET_STATUS), 200
+        g.db.execute("SELECT status, COUNT(*) AS count FROM Veicoli GROUP BY status")
+        rows = g.db.fetchall() or []
+
+        status_map = {"available": 0, "busy": 0, "maintenance": 0}
+        for row in rows:
+            status = (row.get("status") or "").lower()
+            if status in status_map:
+                status_map[status] = int(row["count"] or 0)
+
+        return jsonify(status_map), 200
     except Exception as e:
         return jsonify({
             "error": "INTERNAL_SERVER_ERROR",
@@ -200,10 +158,17 @@ def get_fleet_status():
 # ==========================================
 @bp.get("/average-handling-time")
 def get_average_handling_time():
+    """Ritorna il tempo medio di gestione di una richiesta (in minuti)"""
     try:
-        return jsonify({
-            "average_minutes": MOCK_AVERAGE_HANDLING_TIME
-        }), 200
+        g.db.execute(
+            "SELECT AVG(TIMESTAMPDIFF(MINUTE, data_richiesta, orario_arrivo)) AS avg_minutes "
+            "FROM Richiesta_Soccorso "
+            "WHERE data_richiesta IS NOT NULL AND orario_arrivo IS NOT NULL"
+        )
+        row = g.db.fetchone()
+        avg_minutes = float(row["avg_minutes"] or 0.0) if row else 0.0
+
+        return jsonify({"average_minutes": avg_minutes}), 200
     except Exception as e:
         return jsonify({
             "error": "INTERNAL_SERVER_ERROR",
@@ -215,10 +180,19 @@ def get_average_handling_time():
 # ==========================================
 @bp.get("/average-rating")
 def get_average_rating():
+    """Ritorna la valutazione media del servizio"""
     try:
-        return jsonify({
-            "average_rating": MOCK_AVERAGE_RATING
-        }), 200
+        if not _table_exists("reviews"):
+            return jsonify({
+                "error": "NOT_IMPLEMENTED",
+                "message": "Endpoint non trovato"
+            }), 501
+
+        g.db.execute("SELECT AVG(rating) AS avg_rating FROM reviews")
+        row = g.db.fetchone()
+        avg_rating = float(row["avg_rating"] or 0.0) if row else 0.0
+
+        return jsonify({"average_rating": avg_rating}), 200
     except Exception as e:
         return jsonify({
             "error": "INTERNAL_SERVER_ERROR",
@@ -230,11 +204,28 @@ def get_average_rating():
 # ==========================================
 @bp.get("/reviews")
 def get_reviews():
+    """Ritorna lista delle recensioni recenti degli utenti"""
     try:
-        return jsonify({
-            "reviews": MOCK_REVIEWS,
-            "count": len(MOCK_REVIEWS)
-        }), 200
+        if not _table_exists("reviews"):
+            return jsonify({
+                "error": "NOT_IMPLEMENTED",
+                "message": "Endpoint non trovato"
+            }), 501
+
+        g.db.execute(
+            "SELECT id, author, rating, comment, date "
+            "FROM reviews ORDER BY date DESC LIMIT 10"
+        )
+        rows = g.db.fetchall() or []
+
+        reviews = []
+        for row in rows:
+            review = dict(row)
+            if review.get("date") is not None:
+                review["date"] = review["date"].isoformat()
+            reviews.append(review)
+
+        return jsonify({"reviews": reviews, "count": len(reviews)}), 200
     except Exception as e:
         return jsonify({
             "error": "INTERNAL_SERVER_ERROR",
@@ -246,23 +237,43 @@ def get_reviews():
 # ==========================================
 @bp.get("/traffic/<city>")
 def get_traffic(city):
+    """Ritorna segnalazioni traffico/incidenti per la città indicata"""
     try:
-        city_capitalized = city.capitalize()
-        
-        # Se la città non è nel mock, restituisci lista vuota
-        if city_capitalized not in MOCK_TRAFFIC_INCIDENTS:
+        # Validazione parametro city
+        if not city or len(city) > 100:
             return jsonify({
-                "city": city_capitalized,
-                "incidents": [],
-                "count": 0
-            }), 200
-        
-        incidents = MOCK_TRAFFIC_INCIDENTS[city_capitalized]
-        return jsonify({
-            "city": city_capitalized,
-            "incidents": incidents,
-            "count": len(incidents)
-        }), 200
+                "error": "BAD_REQUEST",
+                "message": "Città non valida"
+            }), 400
+
+        # Validazione caratteri (solo lettere, numeri, spazi e accenti)
+        if not re.match(r"^[a-zA-Z0-9\s\-àèìòùáéíóúäëïöü]+$", city):
+            return jsonify({
+                "error": "BAD_REQUEST",
+                "message": "Città contiene caratteri non validi"
+            }), 400
+
+        if not _table_exists("traffic"):
+            return jsonify({
+                "error": "NOT_IMPLEMENTED",
+                "message": "Endpoint non trovato"
+            }), 501
+
+        g.db.execute(
+            "SELECT id, title, source, pubDate, link "
+            "FROM traffic WHERE LOWER(city) = LOWER(%s) ORDER BY pubDate DESC LIMIT 20",
+            (city,),
+        )
+        rows = g.db.fetchall() or []
+
+        incidents = []
+        for row in rows:
+            incident = dict(row)
+            if incident.get("pubDate") is not None:
+                incident["pubDate"] = incident["pubDate"].isoformat()
+            incidents.append(incident)
+
+        return jsonify({"city": city.capitalize(), "incidents": incidents, "count": len(incidents)}), 200
     except Exception as e:
         return jsonify({
             "error": "INTERNAL_SERVER_ERROR",
