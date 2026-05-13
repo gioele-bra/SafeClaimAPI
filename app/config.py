@@ -1,5 +1,6 @@
 import os
 from dotenv import load_dotenv
+from urllib.parse import quote_plus
 
 # carica prima di leggere le variabili
 load_dotenv()
@@ -18,9 +19,14 @@ class Config:
     MONGODB_USERNAME = os.getenv("MONGODB_USERNAME", "")
     MONGODB_PASSWORD = os.getenv("MONGODB_PASSWORD", "")
     MONGODB_DB = os.getenv("MONGODB_DB", "")
+    MONGODB_AUTH_SOURCE = os.getenv("MONGODB_AUTH_SOURCE", "admin")
     MONGODB_URI = os.getenv(
         "MONGODB_URI",
-        f"mongodb://{MONGODB_USERNAME}:{MONGODB_PASSWORD.replace('+', '%2B').replace('=', '%3D')}@{MONGODB_HOST}:{MONGODB_PORT}/"
+        (
+            f"mongodb://{quote_plus(MONGODB_USERNAME)}:{quote_plus(MONGODB_PASSWORD)}"
+            f"@{MONGODB_HOST}:{MONGODB_PORT}/{MONGODB_DB}"
+            f"?authSource={quote_plus(MONGODB_AUTH_SOURCE)}"
+        )
         if MONGODB_USERNAME and MONGODB_PASSWORD and MONGODB_HOST else ""
     )
     

@@ -4,6 +4,7 @@ from datetime import datetime
 
 from flask import Blueprint, current_app, jsonify, request
 from pymongo import MongoClient
+from pymongo.errors import PyMongoError
 
 bp = Blueprint("impostazioni", __name__)
 
@@ -176,6 +177,16 @@ def get_impostazioni():
             "data": settings
         }), 200
 
+    except PyMongoError as e:
+        current_app.logger.warning(
+            "MongoDB non disponibile per impostazioni soccorso: %s",
+            e
+        )
+        return jsonify({
+            "status": "success",
+            "warning": "Impostazioni soccorso caricate con valori predefiniti: MongoDB non disponibile",
+            "data": copy.deepcopy(DEFAULT_SETTINGS)
+        }), 200
     except Exception as e:
         return jsonify({
             "error": "INTERNAL_SERVER_ERROR",

@@ -2,6 +2,7 @@ import os
 import sys
 
 import pytest
+from pymongo.errors import OperationFailure
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT not in sys.path:
@@ -44,6 +45,11 @@ class FakeCollection:
         self.document = document
 
 
+class FailingCollection:
+    def find_one(self, query):
+        raise OperationFailure("Authentication failed.", code=18)
+
+
 @pytest.fixture
 def impostazioni_client(monkeypatch):
     fake_collection = FakeCollection()
@@ -78,6 +84,30 @@ def test_get_impostazioni_defaults_without_mongo_document(impostazioni_client):
     assert data["profilo"]["avatar_url"] is None
     assert data["notifiche"] == {"push": None, "email": None, "sms": None}
     assert data["parametri_operativi"]["operativo_online"] is None
+
+
+def test_get_impostazioni_returns_defaults_when_mongo_auth_fails(monkeypatch):
+    class DummyMySQLService:
+        def close(self):
+            pass
+
+    monkeypatch.setattr(Config, "MYSQL_HOST", "")
+    monkeypatch.setattr(mysql_service, "MySQLService", DummyMySQLService)
+
+    app = create_app()
+    app.testing = True
+    monkeypatch.setattr(
+        impostazioni,
+        "_get_settings_collection",
+        lambda: FailingCollection()
+    )
+
+    response = app.test_client().get("/api/impostazioni/")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert "warning" in payload
+    assert payload["data"]["profilo"]["nome"] == "Soccorso SafeClaim"
 
 
 def test_get_impostazioni_merges_mongo_document(impostazioni_client):
