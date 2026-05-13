@@ -109,6 +109,58 @@ def modifica_utente(user_id):
     return jsonify({"message": "Utente aggiornato", "utente": _format_user(g.db.fetchone())}), 200
 
 
+@bp.post("/utenti/<int:user_id>/ruoli")
+def update_user_roles(user_id):
+    """Aggiorna i ruoli di un utente."""
+    data = request.get_json(silent=True) or {}
+    
+    # Verifica che l'utente esista
+    g.db.execute("SELECT id FROM Utente WHERE id = %s", (user_id,))
+    if not g.db.fetchone():
+        return jsonify({"error": "UTENTE_NON_TROVATO", "message": "Utente non trovato"}), 404
+    
+    # Estrai i ruoli dal body
+    roles_raw = data.get("ruoli", [])
+    
+    # Normalizza i ruoli (può essere lista o stringa)
+    if isinstance(roles_raw, str):
+        roles_input = [r.strip().lower() for r in roles_raw.split(",") if r.strip()]
+    elif isinstance(roles_raw, list):
+        roles_input = [str(r).strip().lower() for r in roles_raw if r]
+    else:
+        roles_input = []
+    
+    # Valida i ruoli
+    invalid = [r for r in roles_input if r not in VALID_ROLES]
+    if invalid:
+        return jsonify({
+            "error": "BAD_REQUEST",
+            "message": f"Ruoli non riconosciuti: {', '.join(invalid)}. Ruoli ammessi: {', '.join(sorted(VALID_ROLES))}"
+        }), 400
+    
+    # Se non ci sono ruoli validi, ritorna errore
+    if not roles_input:
+        return jsonify({
+            "error": "BAD_REQUEST",
+            "message": "Almeno un ruolo valido è obbligatorio"
+        }), 400
+    
+    # Salva i ruoli come stringa separata da virgola
+    ruoli_str = ",".join(roles_input)
+    
+    # Aggiorna il database
+    g.db.execute("UPDATE Utente SET ruolo = %s WHERE id = %s", (ruoli_str, user_id))
+    
+    # Ritorna l'utente aggiornato
+    g.db.execute("SELECT * FROM Utente WHERE id = %s", (user_id,))
+    user = g.db.fetchone()
+    
+    return jsonify({
+        "message": "Ruoli aggiornati con successo",
+        "utente": _format_user(user)
+    }), 200
+
+
 @bp.delete("/utenti/<int:user_id>")
 def elimina_utente(user_id):
     """Elimina un utente."""
