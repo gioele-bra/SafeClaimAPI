@@ -1,0 +1,38 @@
+[{
+  "_id": {
+    "$oid": "698472b386c7bb66df39600f"
+  },
+  "titolo": "Come segnalare un sinistro",
+  "categoria": "procedure",
+  "tags": [
+    "sinistro",
+    "segnalazione",
+    "automobilista",
+    "guida"
+  ],
+  "contenuto": "Per segnalare un sinistro, accedere all'app e selezionare 'Nuovo Sinistro'. Compilare tutti i campi richiesti: data, ora, luogo, descrizione. Allegare foto del danno e del contesto. Se necessario, richiedere il soccorso stradale direttamente dalla segnalazione.",
+  "destinatari": [
+    "automobilista"
+  ],
+  "allegati": [
+    {
+      "nome": "guida_segnalazione.pdf",
+      "storage_path": "/storage/knowledge/guida_segnalazione.pdf"
+    }
+  ],
+  "faq": [
+    {
+      "domanda": "Quanto tempo ho per segnalare un sinistro?",
+      "risposta": "Il sinistro deve essere segnalato entro 3 giorni dall'accaduto."
+    },
+    {
+      "domanda": "Posso modificare una segnalazione già inviata?",
+      "risposta": "Sì, finché lo stato è 'aperto' è possibile modificare i dati."
+    }
+  ],
+  "data_creazione": "2026-01-15",
+  "data_aggiornamento": "2026-02-01",
+  "versione": 1,
+  "pubblicato": true,
+  "attivo": true
+}]

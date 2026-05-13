@@ -1,0 +1,241 @@
+[{
+  "_id": {
+    "$oid": "69a93fb6138d11504a8058d3"
+  },
+  "officina_id": 1,
+  "attivo": true,
+  "targa": "ZQ149BF",
+  "modello_veicolo": "Renault Clio",
+  "descrizione_danno": "Furto parziale con asportazione di componenti e danni agli accessi.",
+  "data_sinistro": "2026-03-03T11:23:00",
+  "cliente": "Stefano Lombardi",
+  "compagnia_assicurativa": "AXA Assicurazioni",
+  "numero_sinistro": "SIN-2026-23860",
+  "telaio": "67P7KXR3CQTQ0QV89",
+  "data_assegnazione": "2026-03-05T08:32:54.392773",
+  "priorita": "bassa",
+  "stato_sinistro": "assegnato",
+  "note": "Cliente disponibile dal lunedì al venerdì dalle 9 alle 18. Contatti preferiti: telefonico durante orario lavorativo.",
+  "contatto_cliente": {
+    "telefono": "343 7391225",
+    "email": "filippopietroneri@yahoo.com"
+  },
+  "posizione_soccorso": {
+    "type": "Point",
+    "coordinates": [
+      9.19,
+      45.46
+    ]
+  },
+  "stato": "accettato",
+  "preventivo": {
+    "data": "2026-03-05T10:00:00",
+    "costo_totale": 2082,
+    "ore_manodopera": 16,
+    "giorni_previsti": 14,
+    "stato": "approvato",
+    "dettaglio_voci": [
+      {
+        "descrizione": "4 portiere",
+        "importo": 1800,
+        "stato": "fatto"
+      },
+      {
+        "descrizione": "4 guarnizioni portiere",
+        "importo": 22,
+        "stato": "fatto"
+      },
+      {
+        "descrizione": "4 fermaporta",
+        "importo": 260,
+        "stato": "fatto"
+      }
+    ],
+    "fattura": null
+  }
+},
+{
+  "_id": {
+    "$oid": "69a93fbbfd76e4c6c98a8d32"
+  },
+  "officina_id": 1,
+  "attivo": true,
+  "targa": "GV425AP",
+  "modello_veicolo": "Toyota Corolla",
+  "descrizione_danno": "Urto anteriore con danno al paraurti anteriore, cofano e radiatore. Necessaria sostituzione paraurti e verniciatura.",
+  "data_sinistro": "2026-02-26T08:46:00",
+  "cliente": "Giovanni Ferrari",
+  "compagnia_assicurativa": "AXA Assicurazioni",
+  "numero_sinistro": "SIN-2026-48580",
+  "telaio": "BTYK57YD414F13O3V",
+  "data_assegnazione": "2026-03-05T08:32:59.364535",
+  "priorita": "bassa",
+  "stato_sinistro": "assegnato",
+  "note": "Cliente disponibile dal lunedì al venerdì dalle 9 alle 18. Contatti preferiti: telefonico durante orario lavorativo.",
+  "contatto_cliente": {
+    "telefono": "342 9842606",
+    "email": "giovanni.ferrari@email.it"
+  },
+  "posizione_soccorso": {
+    "type": "Point",
+    "coordinates": [
+      9.19,
+      45.46
+    ]
+  },
+  "stato": "accettato",
+  "preventivo": {
+    "data": null,
+    "costo_totale": null,
+    "ore_manodopera": null,
+    "giorni_previsti": null,
+    "stato": "da_creare",
+    "dettaglio_voci": [],
+    "fattura": null
+  }
+},
+{
+  "_id": {
+    "$oid": "69a93fc05804c423103c60d5"
+  },
+  "officina_id": 1,
+  "attivo": true,
+  "targa": "EU593DL",
+  "modello_veicolo": "Kia Sportage",
+  "descrizione_danno": "Danno laterale con ammaccatura sulla fiancata sinistra. Necessaria carteggiatura e verniciatura.",
+  "data_sinistro": "2026-02-05T17:31:00",
+  "cliente": "Massimo Colombo",
+  "compagnia_assicurativa": "Allianz Italia",
+  "numero_sinistro": "SIN-2026-75405",
+  "telaio": "TZ1ZUCO2KIOP1RV2B",
+  "data_assegnazione": "2026-03-05T08:33:04.259326",
+  "priorita": "bassa",
+  "stato_sinistro": "assegnato",
+  "note": "Cliente disponibile dal lunedì al venerdì dalle 9 alle 18. Contatti preferiti: telefonico durante orario lavorativo.",
+  "contatto_cliente": {
+    "telefono": "345 5558925",
+    "email": "massimo.colombo@hotmail.it"
+  },
+  "posizione_soccorso": {
+    "type": "Point",
+    "coordinates": [
+      9.19,
+      45.46
+    ]
+  },
+  "stato": "accettato",
+  "preventivo": {
+    "data": null,
+    "costo_totale": null,
+    "ore_manodopera": null,
+    "giorni_previsti": null,
+    "stato": "da_creare",
+    "dettaglio_voci": [],
+    "fattura": null
+  }
+},
+{
+  "_id": {
+    "$oid": "69a93fc4aa0ce2ebefa738e1"
+  },
+  "officina_id": 1,
+  "attivo": true,
+  "targa": "WC891IO",
+  "modello_veicolo": "Audi A4",
+  "descrizione_danno": "Furto parziale con asportazione di componenti e danni agli accessi.",
+  "data_sinistro": "2026-02-20T15:41:00",
+  "cliente": "Antonio Moretti",
+  "compagnia_assicurativa": "Zurich Connect",
+  "numero_sinistro": "SIN-2026-74987",
+  "telaio": "5HGLKX0VV9WJSWI9E",
+  "data_assegnazione": "2026-03-05T08:33:08.469706",
+  "priorita": "urgente",
+  "stato_sinistro": "assegnato",
+  "note": "Cliente disponibile dal lunedì al venerdì dalle 9 alle 18. Contatti preferiti: telefonico durante orario lavorativo.",
+  "contatto_cliente": {
+    "telefono": "344 7756300",
+    "email": "antonio.moretti@hotmail.it"
+  },
+  "posizione_soccorso": {
+    "type": "Point",
+    "coordinates": [
+      9.19,
+      45.46
+    ]
+  },
+  "stato": "accettato",
+  "preventivo": {
+    "data": null,
+    "costo_totale": null,
+    "ore_manodopera": null,
+    "giorni_previsti": null,
+    "stato": "da_creare",
+    "dettaglio_voci": [],
+    "fattura": null
+  }
+},
+{
+  "_id": {
+    "$oid": "69a94620f33d8d728387280c"
+  },
+  "officina_id": 1,
+  "attivo": true,
+  "targa": "TJ265WG",
+  "modello_veicolo": "Opel Astra",
+  "descrizione_danno": "Allagamento motore danneggiato da acqua salmastra. Necessita ispezione meccanica completa.",
+  "data_sinistro": "2026-02-27T10:10:00",
+  "cliente": "Antonio Moretti",
+  "compagnia_assicurativa": "BNP Paribas Cardif",
+  "numero_sinistro": "SIN-2026-15420",
+  "telaio": "HNWOYPNN2BUN3FDVZ",
+  "data_assegnazione": "2026-03-05T09:00:16.233006",
+  "priorita": "media",
+  "stato_sinistro": "assegnato",
+  "note": "Cliente disponibile dal lunedì al venerdì dalle 9 alle 18. Contatti preferiti: telefonico durante orario lavorativo.",
+  "contatto_cliente": {
+    "telefono": "347 3859833",
+    "email": "antonio.moretti@email.it"
+  },
+  "stato": "accettato",
+  "preventivo": {
+    "data": null,
+    "costo_totale": null,
+    "ore_manodopera": null,
+    "giorni_previsti": null,
+    "stato": "da_creare",
+    "dettaglio_voci": [],
+    "fattura": null
+  }
+},
+{
+  "_id": {
+    "$oid": "69a94af53eb726da52eadf8f"
+  },
+  "officina_id": 1,
+  "attivo": true,
+  "targa": "ST939TM",
+  "modello_veicolo": "Fiat 500",
+  "descrizione_danno": "Urto anteriore con danno al paraurti anteriore, cofano e radiatore. Necessaria sostituzione paraurti e verniciatura.",
+  "data_sinistro": "2026-02-08T10:39:00",
+  "cliente": "Giuseppe Marini",
+  "compagnia_assicurativa": "Assicurazioni Lombarda",
+  "numero_sinistro": "SIN-2026-13092",
+  "telaio": "N04QUPNTKN9ZJNQ8Y",
+  "data_assegnazione": "2026-03-05T09:20:53.455043",
+  "priorita": "urgente",
+  "stato_sinistro": "assegnato",
+  "note": "Cliente disponibile dal lunedì al venerdì dalle 9 alle 18. Contatti preferiti: telefonico durante orario lavorativo.",
+  "contatto_cliente": {
+    "telefono": "343 4276647",
+    "email": "giuseppe.marini@gmail.com"
+  },
+  "preventivo": {
+    "data": null,
+    "costo_totale": null,
+    "ore_manodopera": null,
+    "giorni_previsti": null,
+    "stato": "da_creare",
+    "dettaglio_voci": [],
+    "fattura": null
+  }
+}]

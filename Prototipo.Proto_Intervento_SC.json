@@ -1,0 +1,84 @@
+[{
+  "_id": {
+    "$oid": "69a94829047174f48986be7e"
+  },
+  "sinistro_id": 1,
+  "officina_id": 1,
+  "veicolo_targa": "ZQ149BF",
+  "data_inizio": "2026-03-05T09:00:00",
+  "data_fine": "2026-03-07T17:00:00",
+  "tipo_intervento": "riparazione carrozzeria",
+  "descrizione_lavori": "Sostituzione paraurti anteriore e riverniciatura portiera destra",
+  "ricambi_utilizzati": [
+    {
+      "nome": "Paraurti anteriore",
+      "codice": "PRT-001",
+      "costo": 250
+    },
+    {
+      "nome": "Faro sinistro",
+      "codice": "FRL-012",
+      "costo": 180
+    }
+  ],
+  "manodopera_ore": 12,
+  "foto_prima": [
+    "foto_danno_frontale.jpg",
+    "foto_danno_portiera.jpg"
+  ],
+  "foto_dopo": [
+    "foto_riparato_frontale.jpg"
+  ],
+  "note_tecnico": "Danni strutturali minimi, telaio integro",
+  "stato": "in_lavorazione"
+},
+{
+  "_id": {
+    "$oid": "69a94829047174f48986be80"
+  },
+  "sinistro_id": 3,
+  "officina_id": 1,
+  "veicolo_targa": "MN876YZ",
+  "data_inizio": "2026-03-06T08:30:00",
+  "data_fine": null,
+  "tipo_intervento": "elettronica",
+  "descrizione_lavori": "Diagnosi centralina motore e riprogrammazione sensori",
+  "ricambi_utilizzati": [],
+  "manodopera_ore": 0,
+  "foto_prima": [],
+  "foto_dopo": [],
+  "note_tecnico": "Da valutare dopo diagnosi completa",
+  "stato": "completato",
+  "storico_stati": [
+    {
+      "stato": "in_lavorazione",
+      "data": "2026-03-05T09:15:02.905272"
+    }
+  ]
+},
+{
+  "_id": {
+    "$oid": "69a94829047174f48986be7f"
+  },
+  "sinistro_id": 2,
+  "officina_id": 1,
+  "veicolo_targa": "BC432RT",
+  "data_inizio": "2026-03-03T10:00:00",
+  "data_fine": null,
+  "tipo_intervento": "meccanica",
+  "descrizione_lavori": "Sostituzione radiatore e controllo impianto di raffreddamento",
+  "ricambi_utilizzati": [
+    {
+      "nome": "Radiatore",
+      "codice": "RAD-045",
+      "costo": 320
+    }
+  ],
+  "manodopera_ore": 6,
+  "foto_prima": [
+    "foto_radiatore_rotto.jpg"
+  ],
+  "foto_dopo": [],
+  "note_tecnico": "In attesa ricambio pompa acqua per verifica ulteriore",
+  "stato": "in_corso"
+}]
