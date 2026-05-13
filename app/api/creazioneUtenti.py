@@ -3,8 +3,7 @@ from werkzeug.security import generate_password_hash
 
 bp = Blueprint("creazioneUtenti", __name__)
 
-VALID_ROLES = {"admin", "automobilista", "perito", "officina", "assicuratore", "azienda"}
-
+VALID_ROLES = {"admin", "automobilista", "perito", "officina", "assicuratore", "soccorso", "azienda"}
 
 @bp.post("/users")
 def create_user_endpoint():
