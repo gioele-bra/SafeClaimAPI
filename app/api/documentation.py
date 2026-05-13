@@ -513,28 +513,24 @@ SECTIONS = [
     {
         "name": "Impostazioni",
         "prefix": "/api/impostazioni",
-        "description": "Gestione impostazioni officina (profilo, notifiche, parametri operativi)",
+        "description": "Gestione impostazioni della parte soccorso. I dati sono salvati in MongoDB <code>Proto_Impostazioni_Soccorso_SC</code> come configurazione globale di sistema.",
         "endpoints": [
             {
                 "method": "GET",
                 "path": "/api/impostazioni/",
-                "description": "Recupera tutte le impostazioni (profilo, officina, notifiche, parametri operativi)",
+                "description": "Recupera tutte le impostazioni della dashboard soccorso (profilo, notifiche, parametri operativi)",
                 "response_example": {
                     "status": "success",
                     "data": {
                         "profilo": {
-                            "nome": "Officina Centrale",
-                            "email_contatto": "officina@example.com",
+                            "nome": "Soccorso SafeClaim",
+                            "email_contatto": "soccorso@example.com",
                             "telefono_contatto": "02 1234567",
                             "avatar_url": "https://...",
                         },
-                        "officina": {
-                            "email": "officina@example.com",
-                            "telefono": "+39 02 1234567",
-                            "indirizzo": "Via Roma 123, Milano",
-                        },
                         "notifiche": {"push": True, "email": True, "sms": False},
                         "parametri_operativi": {
+                            "operativo_online": True,
                             "orario_inizio": "08:00",
                             "orario_fine": "20:00",
                             "max_coda": 10,
@@ -542,11 +538,12 @@ SECTIONS = [
                         },
                     },
                 },
+                "errors": {"500": "Errore DB"},
             },
             {
                 "method": "PATCH",
                 "path": "/api/impostazioni/profilo",
-                "description": "Aggiorna i dati del profilo dell'officina",
+                "description": "Aggiorna il profilo visualizzato nella parte soccorso",
                 "request_body": {
                     "nome": {"type": "string", "required": False},
                     "email_contatto": {"type": "string", "required": False},
@@ -554,51 +551,53 @@ SECTIONS = [
                     "avatar_url": {"type": "string", "required": False},
                 },
                 "response_example": {
-                    "message": "Profilo aggiornato con successo",
+                    "message": "Profilo soccorso aggiornato con successo",
                     "data": {
-                        "nome": "Officina Centrale",
-                        "email_contatto": "officina@example.com",
+                        "nome": "Soccorso SafeClaim",
+                        "email_contatto": "soccorso@example.com",
                         "telefono_contatto": "02 1234567",
                         "avatar_url": "https://...",
                     },
                 },
-                "errors": {"400": "Payload mancante"},
+                "errors": {"400": "Payload mancante / campo non valido", "500": "Errore DB"},
             },
             {
                 "method": "PATCH",
                 "path": "/api/impostazioni/notifiche",
-                "description": "Aggiorna le preferenze di notifica (tutti i valori devono essere booleani)",
+                "description": "Aggiorna le preferenze di notifica della parte soccorso (tutti i valori devono essere booleani)",
                 "request_body": {
                     "push": {"type": "boolean", "required": False},
                     "email": {"type": "boolean", "required": False},
                     "sms": {"type": "boolean", "required": False},
                 },
                 "response_example": {
-                    "message": "Preferenze notifiche salvate",
+                    "message": "Preferenze notifiche soccorso salvate",
                     "data": {"push": True, "email": True, "sms": False},
                 },
-                "errors": {"400": "Il campo {key} deve essere booleano"},
+                "errors": {"400": "Payload mancante / campo non valido", "500": "Errore DB"},
             },
             {
                 "method": "PATCH",
                 "path": "/api/impostazioni/parametri-operativi",
-                "description": "Aggiorna i parametri operativi dell'officina",
+                "description": "Aggiorna i parametri operativi della dashboard soccorso",
                 "request_body": {
+                    "operativo_online": {"type": "boolean", "required": False},
                     "orario_inizio": {"type": "string", "required": False, "description": "Formato HH:MM"},
                     "orario_fine": {"type": "string", "required": False, "description": "Formato HH:MM"},
                     "max_coda": {"type": "integer", "required": False},
                     "accettazione_automatica": {"type": "boolean", "required": False},
                 },
                 "response_example": {
-                    "message": "Parametri operativi aggiornati",
+                    "message": "Parametri operativi soccorso aggiornati",
                     "data": {
+                        "operativo_online": True,
                         "orario_inizio": "08:00",
                         "orario_fine": "20:00",
                         "max_coda": 10,
                         "accettazione_automatica": False,
                     },
                 },
-                "errors": {"400": "max_coda deve essere un intero"},
+                "errors": {"400": "Payload mancante / campo non valido", "500": "Errore DB"},
             },
         ],
     },

@@ -34,6 +34,7 @@ Le tre collezioni rappresentano:
 | `Prototipo.Proto_Sinistro_SC.json` | 6 | pratiche di sinistro |
 | `Prototipo.Proto_Intervento_SC.json` | 3 | lavorazioni/interventi tecnici |
 | `Prototipo.Proto_Knowledge_SC.json` | 1 | knowledge base e FAQ |
+| `Proto_Impostazioni_Soccorso_SC` | variabile | impostazioni globali della parte soccorso |
 
 ## Mappa concettuale
 
@@ -231,6 +232,32 @@ Il documento presente spiega come segnalare un sinistro e contiene allegati e FA
 - Attivo: `true`.
 - Versione: `1`.
 
+## Proto_Impostazioni_Soccorso_SC
+
+Collezione usata dall'API `impostazioni` per salvare i dati configurabili della parte soccorso.
+Non ha una tabella SQL equivalente nello schema attuale: e' una configurazione globale di sistema salvata in MongoDB.
+
+### Campi principali
+
+| Campo | Tipo | Note |
+| --- | --- | --- |
+| `_id.$oid` | ObjectId string | identificativo MongoDB del documento impostazioni |
+| `chiave` | string | valore fisso `soccorso` |
+| `ambito` | string | valore fisso `soccorso` |
+| `profilo.nome` | string/null | nome visualizzato della parte soccorso |
+| `profilo.email_contatto` | string/null | email di contatto soccorso |
+| `profilo.telefono_contatto` | string/null | telefono di contatto soccorso |
+| `profilo.avatar_url` | string/null | avatar o immagine profilo soccorso |
+| `notifiche.push` | boolean/null | preferenza notifiche push |
+| `notifiche.email` | boolean/null | preferenza notifiche email |
+| `notifiche.sms` | boolean/null | preferenza notifiche SMS |
+| `parametri_operativi.operativo_online` | boolean/null | disponibilita' operativa del soccorso |
+| `parametri_operativi.orario_inizio` | string/null | formato `HH:MM` |
+| `parametri_operativi.orario_fine` | string/null | formato `HH:MM` |
+| `parametri_operativi.max_coda` | number/null | numero massimo pratiche in coda |
+| `parametri_operativi.accettazione_automatica` | boolean/null | abilita accettazione automatica |
+| `updated_at` | datetime string | ultimo aggiornamento del documento |
+
 ## Relazioni logiche con il database SQL
 
 Questi JSON sembrano affiancare le tabelle SQL descritte in `STRUTTURA_Prototipo_SafeClaim.md`.
@@ -245,6 +272,7 @@ Le relazioni non sono vincolate dal dump, ma si possono interpretare cosi':
 | `Proto_Intervento_SC.veicolo_targa` | `Veicolo.targa` o `Proto_Sinistro_SC.targa` | collegamento testuale |
 | `Proto_Intervento_SC.sinistro_id` | sinistro applicativo | non coincide direttamente con `_id.$oid` dei sinistri |
 | `Proto_Knowledge_SC.destinatari` | `Utente.ruolo` | contenuti filtrabili per ruolo |
+| `Proto_Impostazioni_Soccorso_SC.chiave` | configurazione globale | documento singleton della parte soccorso |
 
 ## Flusso applicativo suggerito
 
@@ -263,4 +291,3 @@ Le relazioni non sono vincolate dal dump, ma si possono interpretare cosi':
 - `preventivo.fattura` e' sempre `null` nel dump: potrebbe essere uno spazio previsto per dati futuri.
 - I file foto/allegati sono indicati come stringhe o path, non come documenti completi; serve un sistema storage esterno.
 - Alcuni campi sono opzionali o assenti in parte dei documenti, quindi il codice deve trattare i JSON come documenti flessibili e non come record SQL rigidi.
-
