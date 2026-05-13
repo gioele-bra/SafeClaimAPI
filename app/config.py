@@ -31,6 +31,12 @@ class Config:
     MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
     MYSQL_DB = os.getenv("MYSQL_DB", "")
 
+    # === Keycloak Configuration ===
+    KC_BASE_URL = os.getenv("KC_BASE_URL", "https://keycloak.giobra.com")
+    KC_REALM = os.getenv("KC_REALM", "safeClaim")
+    KC_ADMIN_CLIENT_ID = os.getenv("KC_ADMIN_CLIENT_ID", "")
+    KC_ADMIN_CLIENT_SECRET = os.getenv("KC_ADMIN_CLIENT_SECRET", "")
+
     def __repr__(self):
         # mostra solo valori non sensibili per debugging
         return (
