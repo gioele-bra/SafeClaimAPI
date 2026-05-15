@@ -3,6 +3,7 @@ from .config import Config
 from .extensions import cors, init_mysql
 from .errors import register_error_handlers
 from .api import register_blueprints
+from .auth_middleware import register_auth_middleware
 
 def create_app():
     app = Flask(__name__)
@@ -20,6 +21,7 @@ def create_app():
     init_mysql(app)
 
     register_error_handlers(app)
+    register_auth_middleware(app)
     register_blueprints(app)
 
     import atexit

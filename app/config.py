@@ -43,6 +43,20 @@ class Config:
     KC_ADMIN_CLIENT_ID = os.getenv("KC_ADMIN_CLIENT_ID", "")
     KC_ADMIN_CLIENT_SECRET = os.getenv("KC_ADMIN_CLIENT_SECRET", "")
 
+    # === JWT Auth Enforcement ===
+    AUTH_ENFORCEMENT_ENABLED = (
+        os.getenv("AUTH_ENFORCEMENT_ENABLED", "true").strip().lower() == "true"
+    )
+    KC_ISSUER = (
+        os.getenv("KC_ISSUER")
+        or f"{KC_BASE_URL.rstrip('/')}/realms/{KC_REALM}"
+    )
+    KC_JWKS_URL = (
+        os.getenv("KC_JWKS_URL")
+        or f"{KC_ISSUER}/protocol/openid-connect/certs"
+    )
+    JWT_LEEWAY_SECONDS = int(os.getenv("JWT_LEEWAY_SECONDS", "30"))
+
     def __repr__(self):
         # mostra solo valori non sensibili per debugging
         return (

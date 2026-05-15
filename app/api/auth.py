@@ -29,7 +29,7 @@ def login():
 
     ruoli = list(user["ruolo"]) if user["ruolo"] else []
 
-    return jsonify({
+    response = jsonify({
         "message": "Login OK (mock)",
         "user": {
             "id": user["id"],
@@ -38,7 +38,10 @@ def login():
             "email": user["email"],
             "ruolo": ruoli,
         }
-    }), 200
+    })
+    # Endpoint legacy: i client devono autenticarsi direttamente contro Keycloak.
+    response.headers["X-Deprecated"] = "true"
+    return response, 200
 
 
 @bp.get("/status")
