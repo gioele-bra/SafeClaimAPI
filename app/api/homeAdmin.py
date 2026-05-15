@@ -149,49 +149,5 @@ def get_system_status():
     }), 200
 
 
-@bp.get("/me")
-def get_admin_me():
-    """Recupera il profilo dell'utente loggato a partire dai claim JWT.
-
-    Lookup ordine:
-      1) `Utente.keycloak_id == sub` del token
-      2) fallback su `Utente.email == email/preferred_username`
-      3) fallback sui claim grezzi se nessuna riga corrisponde (utente
-         autenticato ma senza record applicativo).
-    """
-    # In modalità test o con AUTH_ENFORCEMENT_ENABLED=false, current_user può
-    # mancare: in quel caso restituiamo un profilo neutro per non rompere
-    # la suite di test pre-esistente.
-    current = getattr(g, "current_user", None)
-    if not current:
-        return jsonify({
-            "status": "success",
-            "data": {
-                "id": None, "nome": None, "cognome": None,
-                "email": None, "ruolo": [], "avatar_url": None,
-            }
-        }), 200
-
-    kc_id = current.get("sub")
-    email = current.get("email") or current.get("preferred_username")
-
-    g.db.execute(
-        "SELECT * FROM Utente WHERE keycloak_id = %s OR email = %s LIMIT 1",
-        (kc_id, email),
-    )
-    row = g.db.fetchone()
-
-    if row:
-        return jsonify({"status": "success", "data": _format_user(row)}), 200
-
-    return jsonify({
-        "status": "success",
-        "data": {
-            "id": None,
-            "nome": current.get("given_name"),
-            "cognome": current.get("family_name"),
-            "email": email,
-            "ruolo": current.get("roles", []),
-            "avatar_url": None,
-        }
-    }), 200
+# NB: l'endpoint `GET /api/home-admin/me` è stato rimosso e sostituito da
+# `GET /api/auth/me` (vedi app/api/auth.py). Nessun client lo invocava.

@@ -35,6 +35,10 @@ class KeycloakEmailConflictError(KeycloakError):
     """Email/username già esistente su Keycloak (HTTP 409)."""
 
 
+class KeycloakInvalidCredentialsError(KeycloakError):
+    """Password attuale non valida (HTTP 401 dal password grant)."""
+
+
 def _admin_base() -> str:
     return f"{Config.KC_BASE_URL.rstrip('/')}/admin/realms/{Config.KC_REALM}"
 
@@ -213,6 +217,86 @@ def kc_assign_realm_roles(kc_id: str, role_names: List[str]) -> None:
         raise KeycloakError(
             f"Assegnazione ruoli fallita: HTTP {resp.status_code} {resp.text}"
         )
+
+
+def kc_update_user(kc_id: str, fields: dict) -> None:
+    """Aggiorna i campi dell'utente su Keycloak (firstName/lastName/attributes...).
+
+    `fields` è il payload diretto passato a `PUT /users/{id}`. Esempio:
+        {"firstName": "Mario", "attributes": {"telefono": ["3331234567"]}}
+    """
+    if not fields:
+        return
+
+    try:
+        resp = requests.put(
+            f"{_admin_base()}/users/{kc_id}",
+            headers=_auth_headers(),
+            json=fields,
+            timeout=_HTTP_TIMEOUT,
+        )
+    except requests.RequestException as e:
+        raise KeycloakError(f"Errore update utente Keycloak: {e}") from e
+
+    if resp.status_code not in (200, 204):
+        raise KeycloakError(
+            f"Update utente fallito: HTTP {resp.status_code} {resp.text}"
+        )
+
+
+def kc_set_password(kc_id: str, password: str) -> None:
+    """Imposta la nuova password (non temporanea) dell'utente via Admin API."""
+    try:
+        resp = requests.put(
+            f"{_admin_base()}/users/{kc_id}/reset-password",
+            headers=_auth_headers(),
+            json={"type": "password", "value": password, "temporary": False},
+            timeout=_HTTP_TIMEOUT,
+        )
+    except requests.RequestException as e:
+        raise KeycloakError(f"Errore reset password Keycloak: {e}") from e
+
+    if resp.status_code not in (200, 204):
+        raise KeycloakError(
+            f"Reset password fallito: HTTP {resp.status_code} {resp.text}"
+        )
+
+
+def kc_verify_password(username: str, password: str, client_id: str = "safeclaim-client") -> bool:
+    """Verifica una password facendo un password grant verso Keycloak.
+
+    Ritorna True se le credenziali sono valide, False se Keycloak risponde
+    con `invalid_grant` (password sbagliata). Per altri errori solleva
+    `KeycloakError`.
+    """
+    try:
+        resp = requests.post(
+            _token_url(),
+            data={
+                "grant_type": "password",
+                "client_id": client_id,
+                "username": username,
+                "password": password,
+                "scope": "openid",
+            },
+            timeout=_HTTP_TIMEOUT,
+        )
+    except requests.RequestException as e:
+        raise KeycloakError(f"Errore verifica password Keycloak: {e}") from e
+
+    if resp.status_code == 200:
+        return True
+    if resp.status_code in (400, 401):
+        # Keycloak ritorna 400 con error=invalid_grant per credenziali errate
+        try:
+            err = (resp.json() or {}).get("error")
+        except ValueError:
+            err = None
+        if err in {"invalid_grant", "unauthorized_client"} or resp.status_code == 401:
+            return False
+    raise KeycloakError(
+        f"Verifica password fallita: HTTP {resp.status_code} {resp.text}"
+    )
 
 
 def kc_delete_user(kc_id: str) -> bool:
