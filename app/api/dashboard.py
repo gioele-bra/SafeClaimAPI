@@ -9,7 +9,7 @@ Toggle `operativo_online` persistito in `Proto_Impostazioni_Soccorso_SC`
 from datetime import date, datetime, time, timedelta
 
 from flask import Blueprint, current_app, jsonify, request
-from pymongo.errors import PyMongoError
+from pymongo.errors import OperationFailure, PyMongoError, ServerSelectionTimeoutError
 
 from ..services.mongo_service import MongoDBService
 
@@ -159,6 +159,23 @@ def _get_operativo_online() -> bool:
         return False
 
 
+def _mongo_error_response(exc: Exception, route: str):
+    """Risposta 500 con messaggio diagnostico mirato per errori Mongo."""
+    text = str(exc)
+    if isinstance(exc, OperationFailure) and "Authentication failed" in text:
+        msg = ("MongoDB: autenticazione fallita. Verifica MONGODB_USERNAME, "
+               "MONGODB_PASSWORD e MONGODB_AUTH_SOURCE nel .env del server.")
+        code = "MONGO_AUTH_FAILED"
+    elif isinstance(exc, ServerSelectionTimeoutError):
+        msg = "MongoDB: server non raggiungibile (timeout o auth fallita su tutti i nodi)."
+        code = "MONGO_UNREACHABLE"
+    else:
+        msg = f"Errore database: {text[:200]}"
+        code = "MONGO_ERROR"
+    current_app.logger.error("Mongo %s su %s: %s", code, route, text)
+    return jsonify({"error": code, "message": msg}), 500
+
+
 def _set_operativo_online(value: bool) -> None:
     _db()[SETTINGS_COLLECTION].update_one(
         {"chiave": SETTINGS_KEY},
@@ -182,70 +199,66 @@ def _set_operativo_online(value: bool) -> None:
 def get_summary():
     try:
         col = _sinistri()
-    except Exception as e:
-        current_app.logger.error("Mongo non disponibile per /dashboard/summary: %s", e)
-        return jsonify({"error": "INTERNAL_ERROR", "message": "Database non disponibile"}), 500
 
-    today_start = datetime.combine(date.today(), time.min)
-    today_end = datetime.combine(date.today(), time.max)
-    today_start_iso = today_start.isoformat()
-    today_end_iso = today_end.isoformat()
+        today_start = datetime.combine(date.today(), time.min)
+        today_end = datetime.combine(date.today(), time.max)
+        today_start_iso = today_start.isoformat()
+        today_end_iso = today_end.isoformat()
 
-    active_filter = {
-        "attivo": True,
-        "$or": [
-            {"stato_sinistro": {"$in": _ACTIVE_RAW}},
-            {"stato": {"$in": _ACTIVE_RAW}},
-        ],
-    }
-    richieste_attive = col.count_documents(active_filter)
+        active_filter = {
+            "attivo": True,
+            "$or": [
+                {"stato_sinistro": {"$in": _ACTIVE_RAW}},
+                {"stato": {"$in": _ACTIVE_RAW}},
+            ],
+        }
+        richieste_attive = col.count_documents(active_filter)
 
-    completati_oggi = col.count_documents({
-        "$or": [
-            {"stato_sinistro": {"$in": _HANDLED_RAW}},
-            {"stato": {"$in": _HANDLED_RAW}},
-        ],
-        "data_assegnazione": {"$gte": today_start_iso, "$lte": today_end_iso},
-    })
+        completati_oggi = col.count_documents({
+            "$or": [
+                {"stato_sinistro": {"$in": _HANDLED_RAW}},
+                {"stato": {"$in": _HANDLED_RAW}},
+            ],
+            "data_assegnazione": {"$gte": today_start_iso, "$lte": today_end_iso},
+        })
 
-    tempo_medio = _avg_assignment_minutes(col)
+        tempo_medio = _avg_assignment_minutes(col)
 
-    # Prima richiesta attiva per centrare la mappa.
-    first_active = col.find_one(active_filter, sort=[("data_sinistro", 1)])
-    selected_request_id = None
-    if first_active:
-        selected_request_id = first_active.get("numero_sinistro") or str(first_active.get("_id"))
+        first_active = col.find_one(active_filter, sort=[("data_sinistro", 1)])
+        selected_request_id = None
+        if first_active:
+            selected_request_id = first_active.get("numero_sinistro") or str(first_active.get("_id"))
 
-    return jsonify({"data": {
-        "workshop_name": "Centrale Soccorso",
-        "operativo_online": _get_operativo_online(),
-        "kpi": {
-            "richieste_attive": richieste_attive,
-            "completati_oggi": completati_oggi,
-            "tempo_medio_minuti": tempo_medio,
-        },
-        "selected_request_id": selected_request_id,
-    }}), 200
+        return jsonify({"data": {
+            "workshop_name": "Centrale Soccorso",
+            "operativo_online": _get_operativo_online(),
+            "kpi": {
+                "richieste_attive": richieste_attive,
+                "completati_oggi": completati_oggi,
+                "tempo_medio_minuti": tempo_medio,
+            },
+            "selected_request_id": selected_request_id,
+        }}), 200
+    except PyMongoError as e:
+        return _mongo_error_response(e, "/dashboard/summary")
 
 
 @bp.get("/requests")
 def get_requests():
     try:
         col = _sinistri()
-    except Exception as e:
-        current_app.logger.error("Mongo non disponibile per /dashboard/requests: %s", e)
-        return jsonify({"error": "INTERNAL_ERROR", "message": "Database non disponibile"}), 500
+        cursor = col.find({
+            "attivo": True,
+            "$or": [
+                {"stato_sinistro": {"$in": _QUEUE_RAW}},
+                {"stato": {"$in": _QUEUE_RAW}},
+            ],
+        }).sort([("priorita", 1), ("data_sinistro", 1)])
 
-    cursor = col.find({
-        "attivo": True,
-        "$or": [
-            {"stato_sinistro": {"$in": _QUEUE_RAW}},
-            {"stato": {"$in": _QUEUE_RAW}},
-        ],
-    }).sort([("priorita", 1), ("data_sinistro", 1)])
-
-    data = [_format_sinistro(doc) for doc in cursor]
-    return jsonify({"count": len(data), "data": data}), 200
+        data = [_format_sinistro(doc) for doc in cursor]
+        return jsonify({"count": len(data), "data": data}), 200
+    except PyMongoError as e:
+        return _mongo_error_response(e, "/dashboard/requests")
 
 
 @bp.patch("/operational-status")
