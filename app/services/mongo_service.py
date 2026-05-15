@@ -23,7 +23,13 @@ class MongoDBService:
             self._connect()
     
     def _connect(self):
-        """Crea la connessione a MongoDB"""
+        """Crea il client MongoDB (lazy: la connessione effettiva avviene
+        alla prima query, autenticandosi via `authSource` dell'URI).
+
+        Non eseguiamo `admin.command('ping')` come probe: tipicamente
+        l'utente applicativo non ha permessi sul db `admin` e questo
+        causa un AuthenticationFailed anche quando il db target funziona.
+        """
         try:
             self._client = MongoClient(
                 Config.MONGODB_URI,
@@ -31,10 +37,8 @@ class MongoDBService:
                 connectTimeoutMS=10000,
                 retryWrites=True
             )
-            # Test della connessione
-            self._client.admin.command('ping')
             self._db = self._client[Config.MONGODB_DB]
-            logger.info("Connessione a MongoDB stabilita")
+            logger.info("Client MongoDB inizializzato (auth lazy alla prima query)")
         except (ConnectionFailure, ServerSelectionTimeoutError) as e:
             logger.error(f"Errore connessione MongoDB: {str(e)}")
             raise
