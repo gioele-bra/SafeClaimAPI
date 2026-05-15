@@ -1,9 +1,8 @@
-"""Dettaglio + azioni su un singolo sinistro (read/write su Mongo).
+"""Blueprint sinistri — sostituisce il vecchio `dettagliointervento`.
 
-Storicamente questo blueprint puntava al mock in-memory
-`mock_interventi_store.py`. Ora legge/scrive direttamente su
-`Proto_Sinistro_SC`. Lo schema di response è invariato per non rompere
-il client.
+Sorgente: MongoDB `Proto_Sinistro_SC`. Stato canonico letto da
+`stato_sinistro` con fallback su `stato`, scritto sempre su
+`stato_sinistro`. Vedi `dashboard.py` per la mappatura completa.
 """
 
 from datetime import datetime
@@ -15,14 +14,16 @@ from pymongo.errors import PyMongoError
 
 from .dashboard import (
     SINISTRI_COLLECTION,
-    _STATUS_TEXT,
-    _AVAILABLE_ACTIONS,
     _canonical_state,
     _format_sinistro,
+    _mongo_error_response,
 )
 from ..services.mongo_service import MongoDBService
 
-bp = Blueprint("dettagliointervento", __name__)
+# Blueprint canonico per `/api/v1/sinistri`.
+bp = Blueprint("sinistri", __name__)
+# Alias legacy per `/api/dettaglioIntervento`.
+legacy_bp = Blueprint("sinistri_legacy", __name__)
 
 
 # (stato_corrente, azione) -> (nuovo_stato, messaggio)
@@ -31,7 +32,7 @@ _TRANSITIONS = {
     ("pending", "reject"):         ("rejected", "Intervento rifiutato"),
     ("accepted", "complete"):      ("handled",  "Intervento completato"),
     ("accepted", "reject"):        ("rejected", "Intervento rifiutato"),
-    # Riprendibilità di una richiesta rifiutata (requisito esplicito):
+    # Riprendibilità di una richiesta rifiutata:
     ("rejected", "take_in_charge"): ("accepted", "Intervento ripreso in carico"),
 }
 
@@ -41,7 +42,7 @@ def _collection():
 
 
 def _find_by_request_id(col, request_id: str):
-    """Cerca il sinistro per `numero_sinistro` e, in fallback, per `_id`."""
+    """Cerca il sinistro per `numero_sinistro` e in fallback per `_id`."""
     doc = col.find_one({"numero_sinistro": request_id})
     if doc:
         return doc
@@ -52,7 +53,6 @@ def _find_by_request_id(col, request_id: str):
 
 
 def _format_sinistro_detail(doc) -> dict:
-    """Estensione di `_format_sinistro` con i campi utili al dettaglio."""
     base = _format_sinistro(doc)
     base.update({
         "numero_sinistro": doc.get("numero_sinistro"),
@@ -72,32 +72,35 @@ def _format_sinistro_detail(doc) -> dict:
     return base
 
 
-@bp.get("/<string:request_id>")
+# ---------------------------------------------------------------------------
+# Handlers
+# ---------------------------------------------------------------------------
+
+
 def get_detail(request_id):
     try:
         col = _collection()
-    except Exception as e:
-        current_app.logger.error("Mongo non disponibile per dettaglio: %s", e)
-        return jsonify({"error": "INTERNAL_ERROR", "message": "Database non disponibile"}), 500
-
-    doc = _find_by_request_id(col, request_id)
-    if not doc:
-        return jsonify({"error": "NOT_FOUND", "message": "Intervento non trovato"}), 404
-    return jsonify({"data": _format_sinistro_detail(doc)}), 200
+        doc = _find_by_request_id(col, request_id)
+        if not doc:
+            return jsonify({"error": "NOT_FOUND",
+                            "message": "Intervento non trovato"}), 404
+        return jsonify({"data": _format_sinistro_detail(doc)}), 200
+    except PyMongoError as e:
+        return _mongo_error_response(e, f"/sinistri/{request_id}")
 
 
 def _apply_action(request_id: str, action: str):
     try:
         col = _collection()
-    except Exception as e:
-        current_app.logger.error("Mongo non disponibile per azione %s: %s", action, e)
-        return jsonify({"error": "INTERNAL_ERROR", "message": "Database non disponibile"}), 500
+    except PyMongoError as e:
+        return _mongo_error_response(e, f"/sinistri/{request_id}/{action}")
 
-    request.get_json(silent=True)  # consumiamo eventuale body, non lo usiamo
+    request.get_json(silent=True)  # consuma eventuale body
 
     doc = _find_by_request_id(col, request_id)
     if not doc:
-        return jsonify({"error": "NOT_FOUND", "message": "Intervento non trovato"}), 404
+        return jsonify({"error": "NOT_FOUND",
+                        "message": "Intervento non trovato"}), 404
 
     current_state = _canonical_state(doc)
     transition = _TRANSITIONS.get((current_state, action))
@@ -116,8 +119,6 @@ def _apply_action(request_id: str, action: str):
         "stato_sinistro": new_status,
         "data_aggiornamento_stato": now_iso,
     }
-    # Quando si passa a "accepted" la prima volta, imposta data_assegnazione
-    # se non già valorizzata.
     if new_status == "accepted" and not doc.get("data_assegnazione"):
         update["data_assegnazione"] = now_iso
 
@@ -125,7 +126,8 @@ def _apply_action(request_id: str, action: str):
         col.update_one({"_id": doc["_id"]}, {"$set": update})
     except PyMongoError as e:
         current_app.logger.error("Update sinistro %s fallito: %s", doc.get("_id"), e)
-        return jsonify({"error": "INTERNAL_ERROR", "message": "Aggiornamento fallito"}), 500
+        return jsonify({"error": "INTERNAL_ERROR",
+                        "message": "Aggiornamento fallito"}), 500
 
     doc.update(update)
     return jsonify({
@@ -136,16 +138,33 @@ def _apply_action(request_id: str, action: str):
     }), 200
 
 
-@bp.post("/<string:request_id>/take-in-charge")
 def take_in_charge(request_id):
     return _apply_action(request_id, "take_in_charge")
 
 
-@bp.post("/<string:request_id>/reject")
 def reject(request_id):
     return _apply_action(request_id, "reject")
 
 
-@bp.post("/<string:request_id>/complete")
 def complete(request_id):
     return _apply_action(request_id, "complete")
+
+
+# ---------------------------------------------------------------------------
+# Route canoniche (italiane, kebab-case) su `bp` → /api/v1/sinistri
+# ---------------------------------------------------------------------------
+
+bp.add_url_rule("/<string:request_id>",                    "get_detail",     get_detail,     methods=["GET"])
+bp.add_url_rule("/<string:request_id>/prendi-in-carico",   "take_in_charge", take_in_charge, methods=["POST"])
+bp.add_url_rule("/<string:request_id>/rifiuta",            "reject",         reject,         methods=["POST"])
+bp.add_url_rule("/<string:request_id>/completa",           "complete",       complete,       methods=["POST"])
+
+
+# ---------------------------------------------------------------------------
+# Alias legacy su `legacy_bp` → /api/dettaglioIntervento
+# ---------------------------------------------------------------------------
+
+legacy_bp.add_url_rule("/<string:request_id>",                 "get_detail_legacy",  get_detail,     methods=["GET"])
+legacy_bp.add_url_rule("/<string:request_id>/take-in-charge",  "take_legacy",        take_in_charge, methods=["POST"])
+legacy_bp.add_url_rule("/<string:request_id>/reject",          "reject_legacy",      reject,         methods=["POST"])
+legacy_bp.add_url_rule("/<string:request_id>/complete",        "complete_legacy",    complete,       methods=["POST"])

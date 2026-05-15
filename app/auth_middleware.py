@@ -27,12 +27,20 @@ logger = logging.getLogger(__name__)
 # (method, path) esatti — sempre pubblici.
 WHITELIST_EXACT = frozenset({
     ("GET", "/"),
+    # Health: canonical v1 + alias legacy.
+    ("GET", "/api/v1/health"),
     ("GET", "/api/common/health"),
+    # Login mock: canonical v1 + alias legacy.
+    ("POST", "/api/v1/auth/login"),
     ("POST", "/api/auth/login"),
+    # Status (orfano ma whitelisted finché esiste alias).
+    ("GET", "/api/v1/auth/status"),
     ("GET", "/api/auth/status"),
 })
 
 # Prefissi sempre pubblici (la barra finale è opzionale).
+# `/documentation` ha login Keycloak interno: il middleware JWT non lo
+# tocca, sarà la doc stessa a gestire la session cookie.
 WHITELIST_PREFIXES = ("/documentation",)
 
 

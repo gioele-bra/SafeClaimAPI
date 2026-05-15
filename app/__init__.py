@@ -9,6 +9,11 @@ def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
 
+    # Session cookie hardening (usata da /documentation/ con OIDC).
+    app.config["SESSION_COOKIE_HTTPONLY"] = True
+    app.config["SESSION_COOKIE_SECURE"] = True  # solo HTTPS in produzione
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+
     # Configurazione CORS aggiornata ed espansa per evitare i blocchi
     cors.init_app(app, resources={
         r"/api/*": {

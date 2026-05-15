@@ -1,7 +1,235 @@
+"""Documentazione API + protezione Keycloak OIDC.
+
+Per accedere a `/documentation/`:
+  1. Browser → GET /documentation/ → controlla session cookie.
+  2. Se non autenticato → redirect a /documentation/auth/login.
+  3. /auth/login genera state, redirige a Keycloak authorize URL.
+  4. Keycloak ↩ /documentation/auth/callback?code=...&state=...
+  5. Scambio code → token. Verifico ruolo admin in `realm_access.roles`.
+  6. Salvo sub+email+roles in session, redirect alla doc.
+
+Variabili `.env` richieste:
+  * KC_DOCS_CLIENT_ID
+  * KC_DOCS_CLIENT_SECRET
+  * KC_DOCS_REQUIRED_ROLE (default "admin")
+  * SECRET_KEY (Flask) — DEVE essere settato per la session.
+"""
+
 import json
-from flask import Blueprint, make_response
+import secrets
+from functools import wraps
+from urllib.parse import urlencode
+
+import requests
+from flask import (
+    Blueprint,
+    current_app,
+    make_response,
+    redirect,
+    request,
+    session,
+    url_for,
+)
+
+from ..config import Config
 
 bp = Blueprint("documentation", __name__)
+
+_HTTP_TIMEOUT = 10
+_SESSION_KEY = "docs_user"
+_STATE_KEY = "docs_oauth_state"
+
+
+# ---------------------------------------------------------------------------
+# OIDC helpers
+# ---------------------------------------------------------------------------
+
+
+def _oidc_authorize_url() -> str:
+    return (
+        f"{Config.KC_BASE_URL.rstrip('/')}"
+        f"/realms/{Config.KC_REALM}/protocol/openid-connect/auth"
+    )
+
+
+def _oidc_token_url() -> str:
+    return (
+        f"{Config.KC_BASE_URL.rstrip('/')}"
+        f"/realms/{Config.KC_REALM}/protocol/openid-connect/token"
+    )
+
+
+def _oidc_logout_url() -> str:
+    return (
+        f"{Config.KC_BASE_URL.rstrip('/')}"
+        f"/realms/{Config.KC_REALM}/protocol/openid-connect/logout"
+    )
+
+
+def _redirect_uri() -> str:
+    """URL assoluto della callback. Configurato lato Keycloak come
+    Valid Redirect URI del client `safeclaim-docs`.
+    """
+    return url_for("documentation.auth_callback", _external=True)
+
+
+def require_docs_auth(view):
+    """Protegge la view richiedendo session cookie valido.
+
+    Se la session manca o è incompleta, redirige a `/auth/login`
+    preservando il `next` URL per il redirect post-login.
+    """
+
+    @wraps(view)
+    def _wrapped(*args, **kwargs):
+        user = session.get(_SESSION_KEY)
+        if not user or Config.KC_DOCS_REQUIRED_ROLE not in (user.get("roles") or []):
+            session.pop(_SESSION_KEY, None)
+            return redirect(
+                url_for("documentation.auth_login", next=request.path)
+            )
+        return view(*args, **kwargs)
+
+    return _wrapped
+
+
+# ---------------------------------------------------------------------------
+# OIDC routes
+# ---------------------------------------------------------------------------
+
+
+@bp.get("/auth/login")
+def auth_login():
+    if not Config.KC_DOCS_CLIENT_ID or not Config.KC_DOCS_CLIENT_SECRET:
+        return _render_error(
+            "Documentazione non configurata",
+            "Le variabili d'ambiente KC_DOCS_CLIENT_ID e "
+            "KC_DOCS_CLIENT_SECRET non sono impostate sul server."
+        ), 503
+
+    state = secrets.token_urlsafe(32)
+    session[_STATE_KEY] = state
+    # Salviamo il path richiesto pre-login (default: root della doc).
+    session["docs_next"] = request.args.get("next") or url_for("documentation.get_documentation")
+
+    params = {
+        "client_id": Config.KC_DOCS_CLIENT_ID,
+        "response_type": "code",
+        "scope": "openid profile email",
+        "redirect_uri": _redirect_uri(),
+        "state": state,
+    }
+    return redirect(f"{_oidc_authorize_url()}?{urlencode(params)}")
+
+
+@bp.get("/auth/callback")
+def auth_callback():
+    # 1) Validazione state (CSRF)
+    expected_state = session.pop(_STATE_KEY, None)
+    received_state = request.args.get("state")
+    if not expected_state or expected_state != received_state:
+        return _render_error(
+            "Autenticazione fallita",
+            "Stato OAuth non valido (possibile CSRF). Riprovare il login."
+        ), 400
+
+    error = request.args.get("error")
+    if error:
+        desc = request.args.get("error_description") or error
+        return _render_error("Autenticazione fallita", desc), 400
+
+    code = request.args.get("code")
+    if not code:
+        return _render_error("Autenticazione fallita",
+                              "Codice di autorizzazione mancante."), 400
+
+    # 2) Scambio code → token
+    try:
+        resp = requests.post(
+            _oidc_token_url(),
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": _redirect_uri(),
+                "client_id": Config.KC_DOCS_CLIENT_ID,
+                "client_secret": Config.KC_DOCS_CLIENT_SECRET,
+            },
+            timeout=_HTTP_TIMEOUT,
+        )
+    except requests.RequestException as e:
+        current_app.logger.error("Token exchange docs fallito: %s", e)
+        return _render_error("Autenticazione fallita",
+                              "Servizio identità non raggiungibile."), 502
+
+    if resp.status_code != 200:
+        current_app.logger.error("Token exchange docs HTTP %s: %s",
+                                  resp.status_code, resp.text[:300])
+        return _render_error("Autenticazione fallita",
+                              "Keycloak ha rifiutato il code exchange."), 400
+
+    tokens = resp.json() or {}
+    access_token = tokens.get("access_token")
+    refresh_token = tokens.get("refresh_token")
+    if not access_token:
+        return _render_error("Autenticazione fallita",
+                              "Token di accesso mancante nella response."), 502
+
+    # 3) Verifica firma + ruolo richiesto
+    try:
+        from ..services.jwt_service import verify_access_token
+        claims = verify_access_token(access_token)
+    except Exception as e:
+        current_app.logger.error("JWT docs invalid: %s", e)
+        return _render_error("Autenticazione fallita",
+                              f"Token non valido: {e}"), 400
+
+    realm_roles = (claims.get("realm_access") or {}).get("roles") or []
+    if Config.KC_DOCS_REQUIRED_ROLE not in realm_roles:
+        return _render_error(
+            "Accesso negato",
+            f"Servono i privilegi di '{Config.KC_DOCS_REQUIRED_ROLE}' "
+            f"per visualizzare la documentazione."
+        ), 403
+
+    # 4) Salva session
+    session[_SESSION_KEY] = {
+        "sub": claims.get("sub"),
+        "email": claims.get("email") or claims.get("preferred_username"),
+        "name": (claims.get("name")
+                 or f"{claims.get('given_name','')} {claims.get('family_name','')}".strip()),
+        "roles": realm_roles,
+        "refresh_token": refresh_token,
+    }
+
+    next_url = session.pop("docs_next", None) or url_for("documentation.get_documentation")
+    return redirect(next_url)
+
+
+@bp.get("/auth/logout")
+def auth_logout():
+    user = session.pop(_SESSION_KEY, None)
+    # Best-effort: invalidiamo anche la sessione su Keycloak.
+    if user and user.get("refresh_token") and Config.KC_DOCS_CLIENT_ID:
+        try:
+            requests.post(
+                _oidc_logout_url(),
+                data={
+                    "client_id": Config.KC_DOCS_CLIENT_ID,
+                    "client_secret": Config.KC_DOCS_CLIENT_SECRET,
+                    "refresh_token": user["refresh_token"],
+                },
+                timeout=5,
+            )
+        except requests.RequestException:
+            pass
+
+    return redirect(url_for("documentation.get_documentation"))
+
+
+# ---------------------------------------------------------------------------
+# SECTIONS — struttura della documentazione (v1)
+# ---------------------------------------------------------------------------
+
 
 METHOD_COLORS = {
     "GET": "#61affe",
@@ -11,755 +239,358 @@ METHOD_COLORS = {
     "PATCH": "#50e3c2",
 }
 
+
+def _ep(method, path, description, *, auth=True, request_body=None,
+        query_params=None, response_example=None, response_code=200,
+        errors=None):
+    return {
+        "method": method, "path": path, "description": description,
+        "auth": auth,
+        "request_body": request_body, "query_params": query_params,
+        "response_example": response_example, "response_code": response_code,
+        "errors": errors,
+    }
+
+
 SECTIONS = [
     {
-        "name": "Root",
-        "prefix": "/",
-        "description": "Endpoint di stato generale dell'API",
+        "name": "System",
+        "prefix": "/api/v1",
+        "description": "Endpoint di sistema (health, root).",
         "endpoints": [
-            {
-                "method": "GET",
-                "path": "/",
-                "description": "Health check generale",
-                "response_example": {"name": "SafeClaim API", "status": "ok"},
-            }
+            _ep("GET", "/", "Root health-check pubblico", auth=False,
+                response_example={"name": "SafeClaim API", "status": "ok"}),
+            _ep("GET", "/api/v1/health", "Health-check del servizio (pubblico)",
+                auth=False,
+                response_example={"status": "ok"}),
         ],
     },
     {
-        "name": "Common",
-        "prefix": "/api/common",
-        "description": "Endpoint comuni di supporto",
+        "name": "Auth",
+        "prefix": "/api/v1/auth",
+        "description": "Profilo utente loggato, cambio password e (legacy) login mock.",
         "endpoints": [
-            {
-                "method": "GET",
-                "path": "/api/common/health",
-                "description": "Health check del servizio",
-                "response_example": {"status": "ok"},
-            }
-        ],
-    },
-    {
-        "name": "Autenticazione",
-        "prefix": "/api/auth",
-        "description": "Endpoint di autenticazione (mock &ndash; Keycloak in arrivo)",
-        "endpoints": [
-            {
-                "method": "POST",
-                "path": "/api/auth/login",
-                "description": "Login utente (mock). Accetta qualsiasi email in DB con password <code>admin123</code>.",
-                "request_body": {
-                    "email": {"type": "string", "required": True, "description": "Email dell'utente"},
-                    "password": {"type": "string", "required": True, "description": "Password dell'utente"},
-                },
-                "response_example": {
-                    "message": "Login OK (mock)",
-                    "user": {"id": 1, "nome": "Mario", "cognome": "Rossi", "email": "mario@example.com", "ruolo": ["automobilista"]},
-                },
-                "errors": {"400": "email e password obbligatori", "401": "Credenziali non valide"},
-            },
-            {
-                "method": "GET",
-                "path": "/api/auth/status",
-                "description": "Stato del provider di autenticazione",
-                "response_example": {"message": "Autenticazione gestita da Keycloak (mock attivo)", "provider": "mock"},
-            },
-        ],
-    },
-    {
-        "name": "Admin &ndash; Gestione Utenti",
-        "prefix": "/api/admin",
-        "description": "CRUD utenti lato amministrativo",
-        "endpoints": [
-            {
-                "method": "GET",
-                "path": "/api/admin/",
-                "description": "Lista tutti gli utenti",
-                "response_example": [{"id": 1, "nome": "Mario", "cognome": "Rossi", "email": "mario@example.com", "telefono": "3331234567", "ruolo": ["automobilista"], "data_registrazione": "2025-01-01T00:00:00"}],
-            },
-            {
-                "method": "GET",
-                "path": "/api/admin/count",
-                "description": "Numero totale utenti",
-                "response_example": {"total_users": 42},
-            },
-            {
-                "method": "GET",
-                "path": "/api/admin/roles-report",
-                "description": "Report conteggio utenti per ruolo",
-                "response_example": {"status": "success", "roles_count": {"automobilista": 20, "perito": 5, "admin": 2}},
-            },
-            {
-                "method": "GET",
-                "path": "/api/admin/&lt;user_id&gt;",
-                "description": "Dettaglio singolo utente per ID",
-                "response_example": {"id": 1, "nome": "Mario", "cognome": "Rossi", "email": "mario@example.com", "telefono": "3331234567", "ruolo": ["automobilista"], "data_registrazione": "2025-01-01T00:00:00"},
-                "errors": {"404": "Utente non trovato"},
-            },
-            {
-                "method": "POST",
-                "path": "/api/admin/",
-                "description": "Crea un nuovo utente",
-                "request_body": {
-                    "nome": {"type": "string", "required": True},
-                    "cognome": {"type": "string", "required": True},
+            _ep("POST", "/api/v1/auth/login",
+                "Login MOCK (deprecato). Accetta qualsiasi email in DB con password "
+                "<code>admin123</code>. Risposta marcata con header <code>X-Deprecated: true</code>. "
+                "I client reali fanno password grant direttamente contro Keycloak.",
+                auth=False,
+                request_body={
                     "email": {"type": "string", "required": True},
+                    "password": {"type": "string", "required": True,
+                                  "description": "Costante <code>admin123</code> in modalità mock"},
+                },
+                response_example={
+                    "message": "Login OK (mock)",
+                    "user": {"id": 1, "nome": "Mario", "cognome": "Rossi",
+                              "email": "mario@example.com", "ruolo": ["automobilista"]}
+                },
+                errors={"400": "email/password mancanti",
+                        "401": "Credenziali non valide"}),
+            _ep("GET", "/api/v1/auth/me",
+                "Profilo dell'utente loggato. Lookup su <code>Utente.keycloak_id</code>, "
+                "fallback su email. Il campo <code>cognome</code> è omesso dalla response se NULL o stringa vuota.",
+                response_example={
+                    "status": "success",
+                    "data": {"id": 12, "nome": "Mario", "cognome": "Rossi",
+                              "email": "mario@example.com",
+                              "telefono": "3331234567",
+                              "ruolo": ["soccorso", "perito"]},
+                }),
+            _ep("PATCH", "/api/v1/auth/me",
+                "Aggiorna il proprio account. Solo <code>nome</code> e <code>telefono</code>. "
+                "<code>cognome</code> non è modificabile self-service.",
+                request_body={
+                    "nome": {"type": "string", "required": False},
+                    "telefono": {"type": "string", "required": False},
+                },
+                response_example={
+                    "status": "success",
+                    "data": {"id": 12, "nome": "Mario", "cognome": "Rossi",
+                              "email": "mario@example.com",
+                              "telefono": "3333333333",
+                              "ruolo": ["soccorso"]},
+                },
+                errors={"400": "FORBIDDEN_FIELD (cognome non self-modificabile) o BAD_REQUEST"}),
+            _ep("POST", "/api/v1/auth/me/password",
+                "Cambia la password. La <code>old_password</code> è validata via password "
+                "grant su Keycloak; la nuova è impostata via Admin REST.",
+                request_body={
+                    "old_password": {"type": "string", "required": True},
+                    "new_password": {"type": "string", "required": True,
+                                      "description": "Minimo 8 caratteri, diversa dalla vecchia"},
+                },
+                response_example={"status": "success",
+                                    "message": "Password aggiornata correttamente"},
+                errors={
+                    "400": "Validazione: lunghezza min 8 o uguale alla precedente",
+                    "401": "INVALID_OLD_PASSWORD",
+                    "502": "KEYCLOAK_UNAVAILABLE",
+                }),
+        ],
+    },
+    {
+        "name": "Utenti",
+        "prefix": "/api/v1/utenti",
+        "description": "CRUD utenti consolidato (era split tra admin / gestioneUtenti / "
+                        "creazioneUtenti / home-admin). Source of truth: MySQL <code>Utente</code> "
+                        "con sync su Keycloak.",
+        "endpoints": [
+            _ep("GET", "/api/v1/utenti",
+                "Lista utenti, paginata e con ricerca opzionale.",
+                query_params={
+                    "search":   {"type": "string",  "required": False,
+                                 "description": "Like su nome/cognome/email"},
+                    "page":     {"type": "integer", "required": False, "default": "1"},
+                    "per_page": {"type": "integer", "required": False, "default": "50",
+                                 "description": "Max 200"},
+                },
+                response_example={
+                    "utenti": [{"id": 1, "nome": "Mario", "cognome": "Rossi",
+                                  "email": "mario@example.com",
+                                  "ruolo": ["automobilista"]}],
+                    "pagination": {"total": 1, "page": 1, "per_page": 50, "total_pages": 1},
+                }),
+            _ep("POST", "/api/v1/utenti",
+                "Crea utente su Keycloak + MySQL (con rollback compensativo).",
+                request_body={
+                    "nome":     {"type": "string", "required": True},
+                    "cognome":  {"type": "string", "required": True},
+                    "email":    {"type": "string", "required": True},
                     "password": {"type": "string", "required": True},
                     "telefono": {"type": "string", "required": False},
-                    "ruolo": {"type": "string", "required": False, "default": "automobilista"},
+                    "ruolo":    {"type": "string|array", "required": False,
+                                 "default": "automobilista",
+                                 "description": "CSV o array di ruoli ammessi"},
                 },
-                "response_code": 201,
-                "errors": {"400": "Campi obbligatori mancanti / Email gi&agrave; registrata"},
-            },
-            {
-                "method": "PUT",
-                "path": "/api/admin/&lt;user_id&gt;",
-                "description": "Aggiorna dati utente (nome, cognome, email, telefono)",
-                "request_body": {
-                    "nome": {"type": "string", "required": False},
-                    "cognome": {"type": "string", "required": False},
-                    "email": {"type": "string", "required": False},
+                response_code=201,
+                response_example={
+                    "message": "Utente creato con successo",
+                    "user": {"id": 42, "nome": "Anna", "cognome": "Bianchi",
+                              "email": "anna@example.com", "ruolo": ["perito"]},
+                },
+                errors={
+                    "400": "Validazione (campi obbligatori, formato email, ruoli non riconosciuti)",
+                    "500": "INCONSISTENT_STATE (Keycloak ok, rollback fallito)",
+                    "502": "KEYCLOAK_UNAVAILABLE",
+                }),
+            _ep("GET", "/api/v1/utenti/count", "Numero totale di utenti.",
+                response_example={"totale_utenti": 42}),
+            _ep("GET", "/api/v1/utenti/stats-ruoli",
+                "Conteggio utenti per ruolo (capitalizzato).",
+                response_example={"status": "success",
+                                    "data": {"Admin": 2, "Automobilista": 20, "Perito": 5}}),
+            _ep("GET", "/api/v1/utenti/&lt;id&gt;", "Dettaglio singolo utente.",
+                response_example={"id": 1, "nome": "Mario", "cognome": "Rossi",
+                                    "email": "mario@example.com", "ruolo": ["automobilista"]},
+                errors={"404": "Utente non trovato"}),
+            _ep("PUT", "/api/v1/utenti/&lt;id&gt;",
+                "Aggiorna dati anagrafici utente.",
+                request_body={
+                    "nome":     {"type": "string", "required": False},
+                    "cognome":  {"type": "string", "required": False},
+                    "email":    {"type": "string", "required": False},
                     "telefono": {"type": "string", "required": False},
                 },
-                "errors": {"400": "Nessun campo da aggiornare", "404": "Utente non trovato"},
-            },
-            {
-                "method": "DELETE",
-                "path": "/api/admin/&lt;user_id&gt;",
-                "description": "Elimina utente per ID",
-                "response_example": {"message": "Utente 1 eliminato con successo"},
-                "errors": {"404": "Utente non trovato"},
-            },
-        ],
-    },
-    {
-        "name": "Creazione Utenti",
-        "prefix": "/api/creazioneUtenti",
-        "description": "Registrazione utenti con validazione ruoli",
-        "endpoints": [
-            {
-                "method": "POST",
-                "path": "/api/creazioneUtenti/users",
-                "description": "Crea un nuovo utente con validazione email e ruoli",
-                "request_body": {
-                    "nome": {"type": "string", "required": True},
-                    "cognome": {"type": "string", "required": True},
-                    "email": {"type": "string", "required": True, "description": "Deve contenere @ e dominio valido"},
-                    "password": {"type": "string", "required": True},
-                    "telefono": {"type": "string", "required": False},
-                    "ruolo": {"type": "string | array", "required": False, "default": "automobilista",
-                              "description": "Uno o pi&ugrave; ruoli separati da virgola oppure array. Valori ammessi: admin, automobilista, perito, officina, assicuratore, azienda"},
+                response_example={"message": "Utente aggiornato", "utente": {"id": 1}},
+                errors={"400": "Nessun campo da aggiornare", "404": "Utente non trovato"}),
+            _ep("DELETE", "/api/v1/utenti/&lt;id&gt;", "Elimina utente.",
+                response_example={"message": "Utente 1 eliminato con successo"},
+                errors={"404": "Utente non trovato"}),
+            _ep("POST", "/api/v1/utenti/&lt;id&gt;/ruoli",
+                "Aggiorna i ruoli di un utente (replace della collezione).",
+                request_body={
+                    "ruoli": {"type": "array<string>", "required": True,
+                               "description": "Ruoli ammessi: admin, automobilista, perito, "
+                                              "officina, assicuratore, soccorso, azienda"},
                 },
-                "response_code": 201,
-                "response_example": {"message": "Utente creato con successo", "user": {"id": 1, "nome": "Mario", "cognome": "Rossi", "email": "mario@example.com", "ruolo": ["automobilista"]}},
-                "errors": {"400": "Campi obbligatori mancanti / Formato email non valido / Ruoli non riconosciuti / Email gi&agrave; registrata"},
-            }
+                response_example={"message": "Ruoli aggiornati con successo",
+                                    "utente": {"id": 1, "ruolo": ["perito"]}},
+                errors={"400": "Ruoli non riconosciuti", "404": "Utente non trovato"}),
         ],
     },
     {
-        "name": "Gestione Utenti",
-        "prefix": "/api/gestioneUtenti",
-        "description": "CRUD e ricerca utenti",
+        "name": "Sinistri",
+        "prefix": "/api/v1/sinistri",
+        "description": "Dettaglio sinistro e azioni (presa in carico, rifiuta, completa). "
+                        "Sorgente: MongoDB <code>Proto_Sinistro_SC</code>.",
         "endpoints": [
-            {
-                "method": "GET",
-                "path": "/api/gestioneUtenti/utenti",
-                "description": "Lista tutti gli utenti",
-                "response_example": {"utenti": [{"id": 1, "nome": "Mario", "cognome": "Rossi", "email": "mario@example.com", "telefono": "3331234567", "ruolo": ["automobilista"], "data_registrazione": "2025-01-01T00:00:00"}]},
-            },
-            {
-                "method": "GET",
-                "path": "/api/gestioneUtenti/utenti/count",
-                "description": "Numero totale utenti",
-                "response_example": {"totale_utenti": 42},
-            },
-            {
-                "method": "GET",
-                "path": "/api/gestioneUtenti/utenti/ruoli",
-                "description": "Lista ruoli attualmente in uso nel sistema",
-                "response_example": {"ruoli_attivi": ["admin", "automobilista", "perito"]},
-            },
-            {
-                "method": "GET",
-                "path": "/api/gestioneUtenti/utenti/cerca",
-                "description": "Cerca utenti per nome, cognome o email (ricerca parziale)",
-                "query_params": {"q": {"type": "string", "required": True, "description": "Termine di ricerca"}},
-                "response_example": {"utenti_trovati": [{"id": 1, "nome": "Mario", "cognome": "Rossi", "email": "mario@example.com"}]},
-                "errors": {"400": "parametro 'q' obbligatorio"},
-            },
-            {
-                "method": "GET",
-                "path": "/api/gestioneUtenti/utenti/&lt;user_id&gt;",
-                "description": "Dettaglio singolo utente per ID",
-                "errors": {"404": "UTENTE_NON_TROVATO"},
-            },
-            {
-                "method": "PUT",
-                "path": "/api/gestioneUtenti/utenti/&lt;user_id&gt;",
-                "description": "Modifica dati utente (nome, cognome, email, telefono)",
-                "request_body": {
-                    "nome": {"type": "string", "required": False},
-                    "cognome": {"type": "string", "required": False},
-                    "email": {"type": "string", "required": False},
-                    "telefono": {"type": "string", "required": False},
-                },
-                "response_example": {"message": "Utente aggiornato", "utente": {"id": 1, "nome": "Mario", "cognome": "Rossi", "email": "mario@example.com"}},
-                "errors": {"400": "Nessun campo da aggiornare", "404": "Utente non trovato"},
-            },
-            {
-                "method": "DELETE",
-                "path": "/api/gestioneUtenti/utenti/&lt;user_id&gt;",
-                "description": "Elimina utente per ID",
-                "response_example": {"message": "Utente 1 eliminato con successo"},
-                "errors": {"404": "Utente non trovato"},
-            },
+            _ep("GET", "/api/v1/sinistri/&lt;id&gt;",
+                "Dettaglio di un sinistro. <code>id</code> può essere "
+                "<code>numero_sinistro</code> o ObjectId.",
+                response_example={"data": {"id": "SIN-2026-23860",
+                                              "cliente": "Stefano Lombardi",
+                                              "stato": "accepted",
+                                              "priorita": "bassa",
+                                              "modello_veicolo": "Renault Clio",
+                                              "targa": "ZQ149BF"}},
+                errors={"404": "Intervento non trovato",
+                        "500": "MONGO_AUTH_FAILED / MONGO_UNREACHABLE"}),
+            _ep("POST", "/api/v1/sinistri/&lt;id&gt;/prendi-in-carico",
+                "Imposta lo stato del sinistro a <code>accepted</code>. Funziona anche su "
+                "sinistri precedentemente <code>rejected</code> (riprendibilità).",
+                response_example={"message": "Intervento preso in carico",
+                                    "request_id": "SIN-2026-23860",
+                                    "new_status": "accepted",
+                                    "data": {}},
+                errors={"409": "INVALID_ACTION nello stato corrente"}),
+            _ep("POST", "/api/v1/sinistri/&lt;id&gt;/rifiuta",
+                "Imposta lo stato a <code>rejected</code>.",
+                response_example={"message": "Intervento rifiutato",
+                                    "new_status": "rejected"}),
+            _ep("POST", "/api/v1/sinistri/&lt;id&gt;/completa",
+                "Imposta lo stato a <code>handled</code> (solo da <code>accepted</code>).",
+                response_example={"message": "Intervento completato",
+                                    "new_status": "handled"}),
         ],
     },
     {
-        "name": "Soccorsi",
-        "prefix": "/api/soccorsi",
-        "description": "Richieste di soccorso stradale",
+        "name": "Dashboard",
+        "prefix": "/api/v1/dashboard",
+        "description": "KPI e coda sinistri per la dashboard operativa.",
         "endpoints": [
-            {
-                "method": "GET",
-                "path": "/api/soccorsi/",
-                "description": "Lista tutte le richieste di soccorso (ordinate per data decrescente)",
-                "response_example": {"count": 1, "data": [{"id": 1, "data_richiesta": "2025-06-01T10:30:00", "orario_arrivo": "2025-06-01T11:00:00"}]},
-            },
-            {
-                "method": "GET",
-                "path": "/api/soccorsi/&lt;soccorso_id&gt;",
-                "description": "Dettaglio singola richiesta di soccorso",
-                "errors": {"404": "Richiesta non trovata"},
-            },
-        ],
-    },
-    {
-        "name": "Richieste",
-        "prefix": "/api/richieste",
-        "description": "Gestione richieste con filtro per stato",
-        "endpoints": [
-            {
-                "method": "GET",
-                "path": "/api/richieste/",
-                "description": "Lista richieste, con filtro opzionale per stato",
-                "query_params": {"status": {"type": "string", "required": False, "description": "Filtra per stato. Valori ammessi: in_attesa, assegnata, in_corso, completata, annullata"}},
-                "response_example": {"success": True, "count": 1, "data": [{"id": 1, "data_richiesta": "2025-06-01T10:30:00", "orario_arrivo": "2025-06-01T11:00:00"}]},
-                "errors": {"400": "Stato non valido"},
-            },
-            {
-                "method": "GET",
-                "path": "/api/richieste/&lt;richiesta_id&gt;",
-                "description": "Dettaglio singola richiesta per ID",
-                "errors": {"404": "Richiesta non trovata"},
-            },
-        ],
-    },
-    {
-        "name": "Dashboard Soccorso",
-        "prefix": "/api/dashboard",
-        "description": "Endpoint per la dashboard del soccorso (KPI, richieste e stato operativo)",
-        "endpoints": [
-            {
-                "method": "GET",
-                "path": "/api/dashboard/summary",
-                "description": "Recupera il sommario della dashboard (nome officina, KPI e ID richiesta selezionata)",
-                "response_example": {
+            _ep("GET", "/api/v1/dashboard/riepilogo",
+                "KPI di dashboard: richieste attive, completati oggi, tempo medio assegnazione, "
+                "stato operativo del servizio.",
+                response_example={
                     "data": {
-                        "workshop_name": "Officina Centrale",
+                        "workshop_name": "Centrale Soccorso",
                         "operativo_online": True,
-                        "kpi": {
-                            "richieste_attive": 2,
-                            "completati_oggi": 1,
-                            "tempo_medio_minuti": 34
-                        },
-                        "selected_request_id": "SOS-2491"
+                        "kpi": {"richieste_attive": 6, "completati_oggi": 0,
+                                  "tempo_medio_minuti": 178},
+                        "selected_request_id": "SIN-2026-23860",
                     }
+                }),
+            _ep("GET", "/api/v1/dashboard/coda",
+                "Coda dei sinistri da gestire (<code>attivo=true</code>, stato "
+                "pending/accepted/rejected), ordinata per priorità+data.",
+                response_example={"count": 1,
+                                    "data": [{"id": "SIN-2026-23860",
+                                                "cliente": "Stefano Lombardi",
+                                                "status": "accepted",
+                                                "available_actions": ["complete", "reject"]}]}),
+            _ep("PATCH", "/api/v1/dashboard/stato-operativo",
+                "Toggle dello stato operativo del soccorso (online/offline). Persistito su "
+                "MongoDB <code>Proto_Impostazioni_Soccorso_SC</code>.",
+                request_body={
+                    "operativo_online": {"type": "boolean", "required": True},
                 },
-            },
-            {
-                "method": "GET",
-                "path": "/api/dashboard/requests",
-                "description": "Lista tutte le richieste visibili in dashboard",
-                "response_example": {
-                    "count": 3,
-                    "data": [
-                        {
-                            "id": "SOS-2491",
-                            "vehicle_type": "Furgone",
-                            "vehicle_label": "Fiat Ducato",
-                            "cliente": "Mario Rossi",
-                            "posizione": "Milano Centrale",
-                            "lat": 45.4841,
-                            "lng": 9.2043,
-                            "status": "pending",
-                            "status_text": "In attesa di presa in carico",
-                            "available_actions": ["take_in_charge", "reject"]
-                        }
-                    ]
-                },
-            },
-            {
-                "method": "PATCH",
-                "path": "/api/dashboard/operational-status",
-                "description": "Aggiorna lo stato di disponibilità (online/offline) dell'officina",
-                "request_body": {
-                    "operativo_online": {"type": "boolean", "required": True, "description": "Nuovo stato operativo"}
-                },
-                "response_example": {
-                    "message": "Stato operativo aggiornato",
-                    "data": {
-                        "workshop_name": "Officina Centrale",
-                        "operativo_online": False,
-                        "kpi": {"richieste_attive": 2, "completati_oggi": 1, "tempo_medio_minuti": 34},
-                        "selected_request_id": "SOS-2491"
-                    }
-                },
-                "errors": {"400": "Il campo 'operativo_online' deve essere booleano"},
-            },
-        ],
-    },
-    {
-        "name": "Home Admin",
-        "prefix": "/api/home-admin",
-        "description": "Endpoint per la dashboard principale dell'amministratore",
-        "endpoints": [
-            {
-                "method": "GET",
-                "path": "/api/home-admin/stats-ruoli",
-                "description": "Recupera il conteggio reale degli utenti per ogni ruolo",
-                "response_example": {
-                    "status": "success",
-                    "data": {"Perito": 24, "Admin": 5, "Automobilista": 120}
-                },
-            },
-            {
-                "method": "GET",
-                "path": "/api/home-admin/notifiche/recenti",
-                "description": "Recupera le ultime notifiche di sistema",
-                "response_example": {
-                    "status": "success",
-                    "data": [
-                        {
-                            "id": 1,
-                            "tipo": "registrazione",
-                            "messaggio": "Nuovo utente registrato: Mario Rossi",
-                            "data": "2026-04-15T10:00:00",
-                            "letta": False
-                        }
-                    ]
-                },
-            },
-            {
-                "method": "GET",
-                "path": "/api/home-admin/utenti",
-                "description": "Ricerca utenti con paginazione lato server",
-                "query_params": {
-                    "search": {"type": "string", "required": False, "description": "Filtro di ricerca (nome, cognome, email)"},
-                    "page": {"type": "integer", "required": False, "default": 1},
-                    "per_page": {"type": "integer", "required": False, "default": 10}
-                },
-                "response_example": {
-                    "status": "success",
-                    "data": [{"id": 1, "nome": "Mario", "cognome": "Rossi", "email": "mario@example.com"}],
-                    "pagination": {"total": 125, "page": 1, "per_page": 10, "total_pages": 13}
-                },
-            },
-            {
-                "method": "GET",
-                "path": "/api/home-admin/audit-logs",
-                "description": "Recupera gli ultimi log di attività del sistema",
-                "response_example": {
-                    "status": "success",
-                    "data": [{"id": 1, "utente": "Admin", "azione": "Accesso effettuato", "timestamp": "2026-04-15T08:00:00"}]
-                },
-            },
-            {
-                "method": "GET",
-                "path": "/api/home-admin/status",
-                "description": "Recupera lo stato di salute dei servizi di sistema",
-                "response_example": {
-                    "status": "success",
-                    "data": {"database": "online", "auth_provider": "online"}
-                },
-            },
-            {
-                "method": "GET",
-                "path": "/api/home-admin/me",
-                "description": "Recupera le informazioni del profilo amministratore corrente",
-                "response_example": {
-                    "status": "success",
-                    "data": {"id": 0, "nome": "Admin", "email": "admin@safeclaim.it", "ruolo": ["admin"]}
-                },
-            },
-        ],
-    },
-    {
-        "name": "Dettaglio Intervento",
-        "prefix": "/api/dettaglioIntervento",
-        "description": "Dettaglio intervento e azioni operative usate dal frontend soccorso",
-        "endpoints": [
-            {
-                "method": "GET",
-                "path": "/api/dettaglioIntervento/&lt;request_id&gt;",
-                "description": "Recupera il dettaglio di un intervento specifico",
-                "response_example": {
-                    "data": {
-                        "id": "SOS-2491",
-                        "cliente": "Mario Rossi",
-                        "vehicle_type": "Furgone",
-                        "vehicle_label": "Fiat Ducato",
-                        "status": "pending",
-                        "status_text": "In attesa di presa in carico",
-                        "lat": 45.4841,
-                        "lng": 9.2043,
-                        "posizione": "Milano Centrale",
-                        "requested_at": "2026-04-10T08:45:00",
-                        "assigned_driver": None,
-                        "notes": "Veicolo fermo per guasto elettrico. Cliente in attesa sul posto.",
-                        "available_actions": ["take_in_charge", "reject"]
-                    }
-                },
-                "errors": {"404": "Intervento non trovato"},
-            },
-            {
-                "method": "POST",
-                "path": "/api/dettaglioIntervento/&lt;request_id&gt;/take-in-charge",
-                "description": "Prende in carico un intervento in stato pending",
-                "request_body": {},
-                "response_example": {
-                    "message": "Intervento preso in carico con successo",
-                    "request_id": "SOS-2491",
-                    "new_status": "accepted",
-                    "data": {
-                        "id": "SOS-2491",
-                        "cliente": "Mario Rossi",
-                        "vehicle_type": "Furgone",
-                        "status": "accepted",
-                        "status_text": "Intervento assegnato",
-                        "lat": 45.4841,
-                        "lng": 9.2043,
-                        "posizione": "Milano Centrale",
-                        "requested_at": "2026-04-10T08:45:00",
-                        "assigned_driver": "Officina Centrale",
-                        "notes": "Veicolo fermo per guasto elettrico. Cliente in attesa sul posto.",
-                        "available_actions": ["complete", "reject"]
-                    }
-                },
-                "errors": {
-                    "404": "Intervento non trovato",
-                    "409": "Azione non disponibile per lo stato corrente",
-                },
-            },
-            {
-                "method": "POST",
-                "path": "/api/dettaglioIntervento/&lt;request_id&gt;/reject",
-                "description": "Rifiuta un intervento in stato pending o accepted",
-                "request_body": {},
-                "response_example": {
-                    "message": "Intervento rifiutato con successo",
-                    "request_id": "SOS-2491",
-                    "new_status": "rejected",
-                    "data": {
-                        "id": "SOS-2491",
-                        "cliente": "Mario Rossi",
-                        "vehicle_type": "Furgone",
-                        "status": "rejected",
-                        "status_text": "Intervento rifiutato",
-                        "lat": 45.4841,
-                        "lng": 9.2043,
-                        "posizione": "Milano Centrale",
-                        "requested_at": "2026-04-10T08:45:00",
-                        "assigned_driver": None,
-                        "notes": "Veicolo fermo per guasto elettrico. Cliente in attesa sul posto.",
-                        "available_actions": []
-                    }
-                },
-                "errors": {
-                    "404": "Intervento non trovato",
-                    "409": "Azione non disponibile per lo stato corrente",
-                },
-            },
-            {
-                "method": "POST",
-                "path": "/api/dettaglioIntervento/&lt;request_id&gt;/complete",
-                "description": "Completa un intervento in stato accepted",
-                "request_body": {},
-                "response_example": {
-                    "message": "Intervento completato con successo",
-                    "request_id": "SOS-2492",
-                    "new_status": "handled",
-                    "data": {
-                        "id": "SOS-2492",
-                        "cliente": "Anna Bianchi",
-                        "vehicle_type": "SUV",
-                        "status": "handled",
-                        "status_text": "Intervento completato",
-                        "lat": 45.4517,
-                        "lng": 9.1765,
-                        "posizione": "Navigli",
-                        "requested_at": "2026-04-10T09:10:00",
-                        "assigned_driver": "Officina Centrale",
-                        "notes": "Richiesto traino verso officina convenzionata.",
-                        "available_actions": []
-                    }
-                },
-                "errors": {
-                    "404": "Intervento non trovato",
-                    "409": "Azione non disponibile per lo stato corrente",
-                },
-            },
-        ],
-    },
-    {
-        "name": "Impostazioni",
-        "prefix": "/api/impostazioni",
-        "description": "Gestione impostazioni della parte soccorso. I dati sono salvati in MongoDB <code>Proto_Impostazioni_Soccorso_SC</code> come configurazione globale di sistema.",
-        "endpoints": [
-            {
-                "method": "GET",
-                "path": "/api/impostazioni/",
-                "description": "Recupera tutte le impostazioni della dashboard soccorso (profilo, notifiche, parametri operativi)",
-                "response_example": {
-                    "status": "success",
-                    "data": {
-                        "profilo": {
-                            "nome": "Soccorso SafeClaim",
-                            "email_contatto": "soccorso@example.com",
-                            "telefono_contatto": "02 1234567",
-                            "avatar_url": "https://...",
-                        },
-                        "notifiche": {"push": True, "email": True, "sms": False},
-                        "parametri_operativi": {
-                            "operativo_online": True,
-                            "orario_inizio": "08:00",
-                            "orario_fine": "20:00",
-                            "max_coda": 10,
-                            "accettazione_automatica": False,
-                        },
-                    },
-                },
-                "errors": {"500": "Errore DB"},
-            },
-            {
-                "method": "PATCH",
-                "path": "/api/impostazioni/profilo",
-                "description": "Aggiorna il profilo visualizzato nella parte soccorso",
-                "request_body": {
-                    "nome": {"type": "string", "required": False},
-                    "email_contatto": {"type": "string", "required": False},
-                    "telefono_contatto": {"type": "string", "required": False},
-                    "avatar_url": {"type": "string", "required": False},
-                },
-                "response_example": {
-                    "message": "Profilo soccorso aggiornato con successo",
-                    "data": {
-                        "nome": "Soccorso SafeClaim",
-                        "email_contatto": "soccorso@example.com",
-                        "telefono_contatto": "02 1234567",
-                        "avatar_url": "https://...",
-                    },
-                },
-                "errors": {"400": "Payload mancante / campo non valido", "500": "Errore DB"},
-            },
-            {
-                "method": "PATCH",
-                "path": "/api/impostazioni/notifiche",
-                "description": "Aggiorna le preferenze di notifica della parte soccorso (tutti i valori devono essere booleani)",
-                "request_body": {
-                    "push": {"type": "boolean", "required": False},
-                    "email": {"type": "boolean", "required": False},
-                    "sms": {"type": "boolean", "required": False},
-                },
-                "response_example": {
-                    "message": "Preferenze notifiche soccorso salvate",
-                    "data": {"push": True, "email": True, "sms": False},
-                },
-                "errors": {"400": "Payload mancante / campo non valido", "500": "Errore DB"},
-            },
-            {
-                "method": "PATCH",
-                "path": "/api/impostazioni/parametri-operativi",
-                "description": "Aggiorna i parametri operativi della dashboard soccorso",
-                "request_body": {
-                    "operativo_online": {"type": "boolean", "required": False},
-                    "orario_inizio": {"type": "string", "required": False, "description": "Formato HH:MM"},
-                    "orario_fine": {"type": "string", "required": False, "description": "Formato HH:MM"},
-                    "max_coda": {"type": "integer", "required": False},
-                    "accettazione_automatica": {"type": "boolean", "required": False},
-                },
-                "response_example": {
-                    "message": "Parametri operativi soccorso aggiornati",
-                    "data": {
-                        "operativo_online": True,
-                        "orario_inizio": "08:00",
-                        "orario_fine": "20:00",
-                        "max_coda": 10,
-                        "accettazione_automatica": False,
-                    },
-                },
-                "errors": {"400": "Payload mancante / campo non valido", "500": "Errore DB"},
-            },
-        ],
-    },
-    {
-        "name": "Flotta",
-        "prefix": "/api/flotta",
-        "description": "Gestione flotta veicoli e contatto autisti",
-        "endpoints": [
-            {
-                "method": "GET",
-                "path": "/api/flotta/",
-                "description": "Ritorna la lista completa dei veicoli (ordinati per nome)",
-                "response_example": [
-                    {"id": 1, "name": "Fiat Ducato", "targa": "AB123CD", "status": "available"}
-                ],
-                "errors": {"500": "Errore nel recupero della flotta"},
-            },
-            {
-                "method": "GET",
-                "path": "/api/flotta/&lt;vehicle_id&gt;",
-                "description": "Dettaglio singolo veicolo per ID",
-                "response_example": {"id": 1, "name": "Fiat Ducato", "targa": "AB123CD", "status": "available"},
-                "errors": {
-                    "404": "Veicolo con ID {vehicle_id} non trovato",
-                    "500": "Errore durante la ricerca del veicolo",
-                },
-            },
-            {
-                "method": "POST",
-                "path": "/api/flotta/contact",
-                "description": "Inoltra una richiesta di contatto verso un autista",
-                "request_body": {
-                    "driver": {"type": "string", "required": True, "description": "Nome dell'autista da contattare"},
-                },
-                "response_example": {
-                    "status": "success",
-                    "message": "Chiamata a Mario Rossi inoltrata correttamente",
-                    "timestamp": "b1e2c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
-                },
-                "errors": {
-                    "400": "Dati mancanti: specificare il nome dell'autista",
-                    "500": "Errore durante l'invio della chiamata",
-                },
-            },
+                response_example={"data": {"operativo_online": False}}),
         ],
     },
     {
         "name": "Analytics",
-        "prefix": "/api/analytics",
-        "description": "KPI, statistiche richieste, stato flotta, recensioni e traffico live (mock)",
+        "prefix": "/api/v1/analytics",
+        "description": "Aggregate sui sinistri MongoDB + stato flotta MySQL.",
         "endpoints": [
-            {
-                "method": "GET",
-                "path": "/api/analytics/total-requests",
-                "description": "Numero totale di richieste gestite",
-                "response_example": {"total": 1250},
-                "errors": {"500": "Errore nel recupero delle richieste totali"},
-            },
-            {
-                "method": "GET",
-                "path": "/api/analytics/pending",
-                "description": "Numero di richieste attualmente in attesa",
-                "response_example": {"pending": 325},
-                "errors": {"500": "Errore nel recupero delle richieste in attesa"},
-            },
-            {
-                "method": "GET",
-                "path": "/api/analytics/accepted",
-                "description": "Numero di richieste in corso (accettate)",
-                "response_example": {"accepted": 350},
-                "errors": {"500": "Errore nel recupero delle richieste in corso"},
-            },
-            {
-                "method": "GET",
-                "path": "/api/analytics/handled",
-                "description": "Numero di richieste completate",
-                "response_example": {"handled": 1085},
-                "errors": {"500": "Errore nel recupero delle richieste completate"},
-            },
-            {
-                "method": "GET",
-                "path": "/api/analytics/requests-last-days/&lt;days&gt;",
-                "description": "Serie temporale del numero di richieste negli ultimi N giorni (max 7 giorni di dati mock)",
-                "response_example": {"days": 7, "data": [120, 145, 132, 150, 110, 160, 140]},
-                "errors": {
-                    "400": "Giorni deve essere tra 1 e 365",
-                    "500": "Errore nel recupero dati ultimi giorni",
-                },
-            },
-            {
-                "method": "GET",
-                "path": "/api/analytics/fleet-status",
-                "description": "Stato attuale della flotta (disponibili, occupati, in manutenzione)",
-                "response_example": {"available": 12, "busy": 8, "maintenance": 3},
-                "errors": {"500": "Errore nel recupero dello stato flotta"},
-            },
-            {
-                "method": "GET",
-                "path": "/api/analytics/average-handling-time",
-                "description": "Tempo medio di gestione di una richiesta (in minuti)",
-                "response_example": {"average_minutes": 34},
-                "errors": {"500": "Errore nel recupero del tempo medio gestione"},
-            },
-            {
-                "method": "GET",
-                "path": "/api/analytics/average-rating",
-                "description": "Valutazione media del servizio (scala 1-5)",
-                "response_example": {"average_rating": 4.25},
-                "errors": {"500": "Errore nel recupero della valutazione media"},
-            },
-            {
-                "method": "GET",
-                "path": "/api/analytics/reviews",
-                "description": "Lista delle recensioni recenti degli utenti",
-                "response_example": {
-                    "reviews": [
-                        {
-                            "id": "b1e2c3d4-...",
-                            "author": "Mario R.",
-                            "rating": 5,
-                            "comment": "Servizio rapidissimo.",
-                            "date": "2026-04-13T10:00:00",
-                        }
-                    ],
-                    "count": 4,
-                },
-                "errors": {"500": "Errore nel recupero delle recensioni"},
-            },
-            {
-                "method": "GET",
-                "path": "/api/analytics/traffic/&lt;city&gt;",
-                "description": "Segnalazioni traffico/incidenti per la citt&agrave; indicata (lista vuota se non disponibile)",
-                "response_example": {
-                    "city": "Milano",
-                    "incidents": [
-                        {
-                            "id": "b1e2c3d4-...",
-                            "title": "Incidente in tangenziale Est a Milano, code di 4 km",
-                            "source": "Ansa",
-                            "pubDate": "2026-04-15T09:45:00",
-                            "link": "https://example.com/1",
-                        }
-                    ],
-                    "count": 5,
-                },
-                "errors": {"500": "Errore nel recupero del traffico"},
-            },
+            _ep("GET", "/api/v1/analytics/riepilogo",
+                "Conteggi per stato + tempo medio di assegnazione (minuti).",
+                response_example={"total": 6, "pending": 0, "accepted": 6,
+                                    "handled": 0, "rejected": 0,
+                                    "average_handling_minutes": 178}),
+            _ep("GET", "/api/v1/analytics/ultimi-giorni/&lt;n&gt;",
+                "Serie temporale: numero sinistri per giorno negli ultimi N giorni.",
+                response_example={"days": 7, "data": [0, 0, 3, 2, 1, 0, 0]},
+                errors={"400": "days deve essere 1..365"}),
+            _ep("GET", "/api/v1/analytics/stato-flotta",
+                "Conteggio veicoli per stato. Sorgente: MySQL <code>Veicoli</code>.",
+                response_example={"available": 5, "busy": 2, "maintenance": 1}),
         ],
     },
     {
-        "name": "Documentazione",
-        "prefix": "/documentation",
-        "description": "Questo endpoint",
+        "name": "Veicoli (Flotta)",
+        "prefix": "/api/v1/veicoli",
+        "description": "CRUD veicoli + contatto autista. Sorgente: MySQL <code>Veicoli</code>.",
         "endpoints": [
-            {
-                "method": "GET",
-                "path": "/documentation",
-                "description": "Restituisce la documentazione completa dell'API in formato HTML",
-            }
+            _ep("GET", "/api/v1/veicoli", "Lista completa dei veicoli.",
+                response_example=[{"id": 1, "name": "Carro-01",
+                                      "status": "available", "driver": "Rossi"}]),
+            _ep("GET", "/api/v1/veicoli/&lt;id&gt;", "Dettaglio veicolo.",
+                errors={"404": "Veicolo non trovato"}),
+            _ep("POST", "/api/v1/veicoli/contatto-autista",
+                "Mock di chiamata autista (non integra ancora con un servizio reale).",
+                request_body={
+                    "driver": {"type": "string", "required": True},
+                },
+                response_example={"status": "success",
+                                    "message": "Chiamata a Rossi inoltrata correttamente",
+                                    "timestamp": "abc123"}),
+        ],
+    },
+    {
+        "name": "Soccorsi (legacy MySQL)",
+        "prefix": "/api/v1/soccorsi",
+        "description": "Lista richieste storiche da MySQL <code>Richiesta_Soccorso</code>. "
+                        "Tabella legacy, NON allineata con i sinistri Mongo.",
+        "endpoints": [
+            _ep("GET", "/api/v1/soccorsi", "Lista richieste di soccorso (ordinate per data desc).",
+                response_example={"count": 1, "data": [{"id": 1,
+                                                              "data_richiesta": "2026-03-01T10:00:00"}]}),
+        ],
+    },
+    {
+        "name": "Impostazioni Soccorso",
+        "prefix": "/api/v1/impostazioni",
+        "description": "Configurazione del servizio soccorso (profilo, notifiche, parametri operativi). "
+                        "Sorgente: MongoDB <code>Proto_Impostazioni_Soccorso_SC</code>.",
+        "endpoints": [
+            _ep("GET", "/api/v1/impostazioni",
+                "Lettura completa delle impostazioni. Se Mongo non disponibile ritorna default + warning.",
+                response_example={"status": "success",
+                                    "data": {"profilo": {"nome": "Soccorso SafeClaim"},
+                                              "notifiche": {"push": True, "email": False, "sms": False},
+                                              "parametri_operativi": {"operativo_online": True}}}),
+            _ep("PATCH", "/api/v1/impostazioni/profilo", "Aggiorna campi del profilo servizio.",
+                request_body={
+                    "nome":               {"type": "string|null", "required": False},
+                    "email_contatto":     {"type": "string|null", "required": False},
+                    "telefono_contatto":  {"type": "string|null", "required": False},
+                    "avatar_url":         {"type": "string|null", "required": False},
+                }),
+            _ep("PATCH", "/api/v1/impostazioni/notifiche",
+                "Toggle delle preferenze notifiche (booleani).",
+                request_body={
+                    "push":  {"type": "boolean", "required": False},
+                    "email": {"type": "boolean", "required": False},
+                    "sms":   {"type": "boolean", "required": False},
+                }),
+            _ep("PATCH", "/api/v1/impostazioni/parametri-operativi",
+                "Aggiorna parametri operativi: orari, coda max, accettazione auto.",
+                request_body={
+                    "operativo_online":         {"type": "boolean", "required": False},
+                    "orario_inizio":            {"type": "string (HH:MM)", "required": False},
+                    "orario_fine":              {"type": "string (HH:MM)", "required": False},
+                    "max_coda":                 {"type": "integer >= 0", "required": False},
+                    "accettazione_automatica":  {"type": "boolean", "required": False},
+                }),
+        ],
+    },
+    {
+        "name": "Alias legacy",
+        "prefix": "(vari)",
+        "description": "Tutti i vecchi path continuano a funzionare come alias permanenti. Mapping completo:",
+        "endpoints": [
+            _ep("*", "/api/common/health", "→ /api/v1/health", auth=False),
+            _ep("*", "/api/auth/*",        "→ /api/v1/auth/* (login, status, me, me/password)", auth=False),
+            _ep("*", "/api/gestioneUtenti/utenti*",   "→ /api/v1/utenti*"),
+            _ep("*", "/api/gestioneUtenti/utenti/cerca?q=", "→ /api/v1/utenti?search="),
+            _ep("*", "/api/creazioneUtenti/users",    "→ POST /api/v1/utenti"),
+            _ep("*", "/api/home-admin/stats-ruoli",   "→ /api/v1/utenti/stats-ruoli"),
+            _ep("*", "/api/dettaglioIntervento/&lt;id&gt;/*",
+                "→ /api/v1/sinistri/&lt;id&gt;/* (take-in-charge → prendi-in-carico, reject → rifiuta, complete → completa)"),
+            _ep("*", "/api/dashboard/*",   "→ /api/v1/dashboard/* (summary → riepilogo, requests → coda, operational-status → stato-operativo)"),
+            _ep("*", "/api/analytics/*",   "→ /api/v1/analytics/* (summary → riepilogo, last-days → ultimi-giorni, fleet-status → stato-flotta)"),
+            _ep("*", "/api/flotta/*",      "→ /api/v1/veicoli/* (contact → contatto-autista)"),
+            _ep("*", "/api/soccorsi/",     "→ /api/v1/soccorsi"),
+            _ep("*", "/api/impostazioni/*", "→ /api/v1/impostazioni/*"),
         ],
     },
 ]
+
+
+# ---------------------------------------------------------------------------
+# HTML helpers
+# ---------------------------------------------------------------------------
 
 
 def _build_method_badge(method):
@@ -772,11 +603,17 @@ def _build_params_table(params, title):
         return ""
     rows = ""
     for name, info in params.items():
-        required = '<span class="tag required">obbligatorio</span>' if info.get("required") else '<span class="tag optional">opzionale</span>'
+        required = ('<span class="tag required">obbligatorio</span>'
+                    if info.get("required")
+                    else '<span class="tag optional">opzionale</span>')
         type_str = info.get("type", "string")
-        default = f' <span class="tag default">default: {info["default"]}</span>' if info.get("default") else ""
+        default = (f' <span class="tag default">default: {info["default"]}</span>'
+                    if info.get("default") else "")
         desc = info.get("description", "")
-        rows += f"<tr><td><code>{name}</code></td><td><code>{type_str}</code></td><td>{required}{default}</td><td>{desc}</td></tr>"
+        rows += (f"<tr><td><code>{name}</code></td>"
+                 f"<td><code>{type_str}</code></td>"
+                 f"<td>{required}{default}</td>"
+                 f"<td>{desc}</td></tr>")
     return f"""
     <div class="params-block">
         <h4>{title}</h4>
@@ -790,7 +627,10 @@ def _build_params_table(params, title):
 def _build_errors_block(errors):
     if not errors:
         return ""
-    items = "".join(f'<li><span class="error-code">{code}</span> {msg}</li>' for code, msg in errors.items())
+    items = "".join(
+        f'<li><span class="error-code">{code}</span> {msg}</li>'
+        for code, msg in errors.items()
+    )
     return f'<div class="errors-block"><h4>Errori</h4><ul>{items}</ul></div>'
 
 
@@ -813,12 +653,16 @@ def _build_endpoint_card(ep):
     query_table = _build_params_table(ep.get("query_params"), "Query Parameters")
     response = _build_response_block(ep)
     errors = _build_errors_block(ep.get("errors"))
+    auth_tag = ('<span class="tag auth-pub">pubblico</span>'
+                if ep.get("auth") is False
+                else '<span class="tag auth-priv">JWT richiesto</span>')
 
     return f"""
     <div class="endpoint-card">
         <div class="endpoint-header">
             {badge}
             <code class="endpoint-path">{ep["path"]}</code>
+            {auth_tag}
         </div>
         <p class="endpoint-desc">{ep["description"]}</p>
         {body_table}
@@ -831,18 +675,164 @@ def _build_endpoint_card(ep):
 def _build_nav(sections):
     items = ""
     for s in sections:
-        anchor = s["name"].replace(" ", "-").replace("&ndash;", "-")
+        anchor = s["name"].replace(" ", "-").replace("(", "").replace(")", "").lower()
         items += f'<a href="#{anchor}">{s["name"]}</a>'
     return items
 
 
+_BASE_CSS = """
+:root {
+    --bg: #fafafa; --surface: #fff; --text: #1a1a2e; --text-muted: #555;
+    --border: #e0e0e0; --primary: #2563eb; --primary-light: #dbeafe;
+    --code-bg: #f1f5f9;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.55;
+}
+.container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+.topbar {
+    display: flex; align-items: center; gap: 16px;
+    padding: 14px 24px; background: var(--surface);
+    border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 10;
+}
+.topbar h1 { font-size: 1.05rem; font-weight: 700; flex: 1; }
+.user-chip {
+    background: var(--primary-light); color: var(--primary);
+    padding: 6px 12px; border-radius: 12px; font-size: .85rem; font-weight: 600;
+}
+.logout-btn {
+    background: transparent; border: 1px solid var(--border); padding: 6px 12px;
+    border-radius: 8px; cursor: pointer; font-size: .85rem; color: var(--text-muted);
+    text-decoration: none;
+}
+.logout-btn:hover { color: var(--text); border-color: var(--text-muted); }
+.nav { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 24px; }
+.nav a {
+    padding: 6px 12px; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 16px; font-size: .85rem; color: var(--text-muted); text-decoration: none;
+}
+.nav a:hover { background: var(--primary-light); color: var(--primary); border-color: var(--primary); }
+.info-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 14px; margin-bottom: 28px;
+}
+.info-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 14px;
+}
+.info-card h3 { font-size: .9rem; color: var(--text-muted); margin-bottom: 8px; }
+.info-card p, .info-card ul, .info-card pre { font-size: .85rem; }
+.info-card ul { list-style: none; }
+.info-card code { background: var(--code-bg); padding: 1px 6px; border-radius: 4px; font-size: .82rem; }
+section { margin-bottom: 36px; }
+.section-header {
+    display: flex; align-items: baseline; gap: 12px; padding-bottom: 8px;
+    border-bottom: 2px solid var(--border); margin-bottom: 12px;
+}
+.section-header h2 { font-size: 1.4rem; }
+.section-prefix { background: var(--code-bg); padding: 3px 8px; border-radius: 6px; font-size: .85rem; color: var(--text-muted); }
+.section-desc { color: var(--text-muted); font-size: .9rem; margin-bottom: 14px; }
+.endpoint-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px; margin-bottom: 12px;
+}
+.endpoint-header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.endpoint-path { background: var(--code-bg); padding: 4px 10px; border-radius: 6px; font-size: .9rem; flex: 1; min-width: 0; word-break: break-all; }
+.endpoint-desc { color: var(--text-muted); font-size: .92rem; margin-bottom: 12px; }
+.method-badge { color: white; padding: 4px 10px; border-radius: 6px; font-weight: 700; font-size: .78rem; min-width: 60px; text-align: center; }
+.params-block, .response-block, .errors-block { margin-top: 12px; }
+h4 { font-size: .85rem; color: var(--text-muted); text-transform: uppercase; margin-bottom: 6px; letter-spacing: .04em; }
+.params-table { width: 100%; border-collapse: collapse; font-size: .85rem; background: var(--surface); }
+.params-table th, .params-table td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border); }
+.params-table th { background: var(--code-bg); font-weight: 600; }
+.tag { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: .72rem; font-weight: 600; }
+.tag.required { background: #fee2e2; color: #b91c1c; }
+.tag.optional { background: var(--code-bg); color: var(--text-muted); }
+.tag.default { background: #ecfdf5; color: #047857; }
+.tag.auth-priv { background: #fef3c7; color: #92400e; }
+.tag.auth-pub { background: #d1fae5; color: #065f46; }
+.response-block pre, .error-schema pre { background: var(--code-bg); padding: 10px; border-radius: 8px; overflow-x: auto; font-size: .82rem; }
+.response-code { background: #10b981; color: white; padding: 1px 6px; border-radius: 4px; font-size: .72rem; font-weight: 700; margin-left: 6px; }
+.errors-block li { margin-left: 12px; list-style: disc; font-size: .85rem; }
+.error-code { background: #fee2e2; color: #b91c1c; padding: 1px 6px; border-radius: 4px; font-weight: 700; font-size: .78rem; }
+.center-card {
+    max-width: 420px; margin: 80px auto; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 14px; padding: 36px 32px;
+    text-align: center; box-shadow: 0 4px 24px rgba(0,0,0,.04);
+}
+.center-card h1 { font-size: 1.4rem; margin-bottom: 12px; }
+.center-card p { color: var(--text-muted); margin-bottom: 20px; }
+.btn-primary {
+    display: inline-block; background: var(--primary); color: white;
+    padding: 10px 22px; border-radius: 10px; font-weight: 600; text-decoration: none;
+}
+.btn-primary:hover { filter: brightness(1.08); }
+.error-banner {
+    background: #fee2e2; color: #b91c1c; padding: 12px 16px;
+    border-radius: 10px; margin-bottom: 16px; font-size: .9rem;
+}
+"""
+
+
+def _render_login_page():
+    html = f"""<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <title>SafeClaim API — Documentazione</title>
+    <style>{_BASE_CSS}</style>
+</head>
+<body>
+    <div class="center-card">
+        <h1>📘 SafeClaim API Docs</h1>
+        <p>L'accesso alla documentazione richiede credenziali con ruolo <code>{Config.KC_DOCS_REQUIRED_ROLE}</code> sul realm <code>{Config.KC_REALM}</code>.</p>
+        <a class="btn-primary" href="{url_for('documentation.auth_login')}">Accedi con Keycloak</a>
+    </div>
+</body>
+</html>"""
+    resp = make_response(html)
+    resp.headers["Content-Type"] = "text/html; charset=utf-8"
+    return resp
+
+
+def _render_error(title, message):
+    html = f"""<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <title>{title}</title>
+    <style>{_BASE_CSS}</style>
+</head>
+<body>
+    <div class="center-card">
+        <h1>⚠️ {title}</h1>
+        <p>{message}</p>
+        <a class="btn-primary" href="{url_for('documentation.auth_login')}">Riprova login</a>
+    </div>
+</body>
+</html>"""
+    resp = make_response(html)
+    resp.headers["Content-Type"] = "text/html; charset=utf-8"
+    return resp
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
+
 @bp.get("/")
 def get_documentation():
-    nav = _build_nav(SECTIONS)
+    user = session.get(_SESSION_KEY)
+    if not user or Config.KC_DOCS_REQUIRED_ROLE not in (user.get("roles") or []):
+        return _render_login_page()
 
+    nav = _build_nav(SECTIONS)
     sections_html = ""
     for section in SECTIONS:
-        anchor = section["name"].replace(" ", "-").replace("&ndash;", "-")
+        anchor = section["name"].replace(" ", "-").replace("(", "").replace(")", "").lower()
         endpoints_html = "".join(_build_endpoint_card(ep) for ep in section["endpoints"])
         sections_html += f"""
         <section id="{anchor}">
@@ -854,363 +844,65 @@ def get_documentation():
             {endpoints_html}
         </section>"""
 
+    display_name = user.get("name") or user.get("email") or "Admin"
+
     html = f"""<!DOCTYPE html>
 <html lang="it">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SafeClaim API &ndash; Documentazione</title>
-<style>
-    :root {{
-        --bg: #fafafa;
-        --surface: #ffffff;
-        --text: #1a1a2e;
-        --text-muted: #555;
-        --border: #e0e0e0;
-        --primary: #2563eb;
-        --primary-light: #dbeafe;
-        --code-bg: #f1f5f9;
-        --sidebar-w: 260px;
-    }}
-
-    * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-
-    body {{
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-        background: var(--bg);
-        color: var(--text);
-        line-height: 1.6;
-    }}
-
-    /* ── Sidebar ── */
-    .sidebar {{
-        position: fixed;
-        top: 0; left: 0;
-        width: var(--sidebar-w);
-        height: 100vh;
-        background: var(--surface);
-        border-right: 1px solid var(--border);
-        padding: 24px 16px;
-        overflow-y: auto;
-        z-index: 10;
-    }}
-    .sidebar h1 {{
-        font-size: 1.2rem;
-        margin-bottom: 4px;
-        color: var(--primary);
-    }}
-    .sidebar .version {{
-        font-size: .75rem;
-        color: var(--text-muted);
-        margin-bottom: 20px;
-        display: block;
-    }}
-    .sidebar a {{
-        display: block;
-        padding: 6px 10px;
-        margin: 2px 0;
-        border-radius: 6px;
-        text-decoration: none;
-        color: var(--text);
-        font-size: .875rem;
-        transition: background .15s;
-    }}
-    .sidebar a:hover {{
-        background: var(--primary-light);
-        color: var(--primary);
-    }}
-
-    /* ── Main ── */
-    .main {{
-        margin-left: var(--sidebar-w);
-        padding: 32px 40px 60px;
-        max-width: 960px;
-    }}
-
-    .hero {{
-        margin-bottom: 36px;
-    }}
-    .hero h1 {{
-        font-size: 2rem;
-        margin-bottom: 8px;
-    }}
-    .hero p {{
-        color: var(--text-muted);
-        font-size: 1rem;
-        max-width: 600px;
-    }}
-
-    /* Info cards */
-    .info-grid {{
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 16px;
-        margin-bottom: 40px;
-    }}
-    .info-card {{
-        background: var(--surface);
-        border: 1px solid var(--border);
-        border-radius: 10px;
-        padding: 18px 20px;
-    }}
-    .info-card h3 {{
-        font-size: .85rem;
-        text-transform: uppercase;
-        letter-spacing: .5px;
-        color: var(--text-muted);
-        margin-bottom: 8px;
-    }}
-    .info-card code {{
-        background: var(--code-bg);
-        padding: 2px 6px;
-        border-radius: 4px;
-        font-size: .85rem;
-    }}
-    .role-list {{
-        display: flex;
-        flex-wrap: wrap;
-        gap: 6px;
-        list-style: none;
-    }}
-    .role-list li {{
-        background: var(--primary-light);
-        color: var(--primary);
-        padding: 3px 10px;
-        border-radius: 20px;
-        font-size: .8rem;
-        font-weight: 500;
-    }}
-    .error-schema pre {{
-        background: var(--code-bg);
-        padding: 10px 14px;
-        border-radius: 6px;
-        font-size: .8rem;
-        overflow-x: auto;
-    }}
-
-    /* ── Sections ── */
-    section {{
-        margin-bottom: 40px;
-    }}
-    .section-header {{
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        margin-bottom: 4px;
-        padding-bottom: 8px;
-        border-bottom: 2px solid var(--primary);
-    }}
-    .section-header h2 {{
-        font-size: 1.3rem;
-    }}
-    .section-prefix {{
-        background: var(--code-bg);
-        padding: 2px 8px;
-        border-radius: 4px;
-        font-size: .85rem;
-        color: var(--text-muted);
-    }}
-    .section-desc {{
-        color: var(--text-muted);
-        margin-bottom: 16px;
-        font-size: .9rem;
-    }}
-
-    /* ── Endpoint card ── */
-    .endpoint-card {{
-        background: var(--surface);
-        border: 1px solid var(--border);
-        border-radius: 10px;
-        padding: 18px 22px;
-        margin-bottom: 14px;
-        transition: box-shadow .2s;
-    }}
-    .endpoint-card:hover {{
-        box-shadow: 0 2px 12px rgba(0,0,0,.06);
-    }}
-    .endpoint-header {{
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        margin-bottom: 6px;
-    }}
-    .method-badge {{
-        display: inline-block;
-        padding: 3px 10px;
-        border-radius: 4px;
-        color: #fff;
-        font-weight: 700;
-        font-size: .75rem;
-        min-width: 60px;
-        text-align: center;
-        letter-spacing: .3px;
-    }}
-    .endpoint-path {{
-        font-size: .95rem;
-        font-weight: 600;
-        color: var(--text);
-    }}
-    .endpoint-desc {{
-        color: var(--text-muted);
-        font-size: .875rem;
-        margin-bottom: 10px;
-    }}
-
-    /* Params table */
-    .params-block {{ margin-bottom: 10px; }}
-    .params-block h4 {{
-        font-size: .8rem;
-        text-transform: uppercase;
-        letter-spacing: .4px;
-        color: var(--text-muted);
-        margin-bottom: 6px;
-    }}
-    .params-table {{
-        width: 100%;
-        border-collapse: collapse;
-        font-size: .85rem;
-    }}
-    .params-table th {{
-        text-align: left;
-        padding: 6px 8px;
-        background: var(--code-bg);
-        font-weight: 600;
-        font-size: .75rem;
-        text-transform: uppercase;
-        letter-spacing: .3px;
-        color: var(--text-muted);
-    }}
-    .params-table td {{
-        padding: 6px 8px;
-        border-bottom: 1px solid var(--border);
-        vertical-align: top;
-    }}
-
-    .tag {{
-        display: inline-block;
-        padding: 1px 7px;
-        border-radius: 3px;
-        font-size: .7rem;
-        font-weight: 600;
-        margin-right: 4px;
-    }}
-    .tag.required {{ background: #fee2e2; color: #dc2626; }}
-    .tag.optional {{ background: #e0f2fe; color: #0284c7; }}
-    .tag.default  {{ background: #f0fdf4; color: #16a34a; }}
-
-    /* Response */
-    .response-block {{ margin-bottom: 10px; }}
-    .response-block h4 {{
-        font-size: .8rem;
-        text-transform: uppercase;
-        letter-spacing: .4px;
-        color: var(--text-muted);
-        margin-bottom: 6px;
-    }}
-    .response-code {{
-        background: #dcfce7;
-        color: #16a34a;
-        padding: 1px 6px;
-        border-radius: 3px;
-        font-size: .75rem;
-        font-weight: 700;
-    }}
-    .response-block pre {{
-        background: #1e293b;
-        color: #e2e8f0;
-        padding: 14px 18px;
-        border-radius: 8px;
-        overflow-x: auto;
-        font-size: .8rem;
-        line-height: 1.5;
-    }}
-
-    /* Errors */
-    .errors-block h4 {{
-        font-size: .8rem;
-        text-transform: uppercase;
-        letter-spacing: .4px;
-        color: var(--text-muted);
-        margin-bottom: 4px;
-    }}
-    .errors-block ul {{
-        list-style: none;
-        font-size: .85rem;
-    }}
-    .errors-block li {{
-        padding: 3px 0;
-    }}
-    .error-code {{
-        display: inline-block;
-        background: #fee2e2;
-        color: #dc2626;
-        padding: 1px 6px;
-        border-radius: 3px;
-        font-size: .75rem;
-        font-weight: 700;
-        margin-right: 6px;
-        font-family: monospace;
-    }}
-
-    /* ── Responsive ── */
-    @media (max-width: 768px) {{
-        .sidebar {{ display: none; }}
-        .main {{ margin-left: 0; padding: 20px 16px; }}
-        .info-grid {{ grid-template-columns: 1fr; }}
-    }}
-</style>
+<title>SafeClaim API — Documentazione</title>
+<style>{_BASE_CSS}</style>
 </head>
 <body>
+<div class="topbar">
+    <h1>📘 SafeClaim API <code style="font-size:.85rem;background:var(--primary-light);padding:2px 8px;border-radius:6px;color:var(--primary);">v1</code></h1>
+    <span class="user-chip">{display_name}</span>
+    <a class="logout-btn" href="{url_for('documentation.auth_logout')}">Logout</a>
+</div>
 
-<nav class="sidebar">
-    <h1>SafeClaim API</h1>
-    <span class="version">v1.0.0</span>
-    {nav}
-</nav>
+<div class="container">
+    <p style="color:var(--text-muted); font-size:.9rem; margin-bottom:18px;">
+        Tutte le rotte sotto <code>/api/v1/*</code> richiedono <strong>Bearer JWT Keycloak</strong>
+        (realm <code>{Config.KC_REALM}</code>), eccetto quelle marcate <span class="tag auth-pub">pubblico</span>.
+        I vecchi path pre-v1 funzionano ancora come alias.
+    </p>
 
-<div class="main">
-    <div class="hero">
-        <h1>SafeClaim API</h1>
-        <p>Documentazione completa dell'API REST per la gestione sinistri, utenti e richieste di soccorso stradale.</p>
-    </div>
+    <nav class="nav">{nav}</nav>
 
     <div class="info-grid">
         <div class="info-card">
             <h3>Autenticazione</h3>
-            <p>Attualmente <strong>mock</strong> (Keycloak in fase di integrazione).<br>
-            Login con qualsiasi email in DB e password <code>admin123</code>.</p>
+            <p>JWT firmato Keycloak (RS256). Header: <code>Authorization: Bearer &lt;token&gt;</code>.
+            Issuer atteso: <code>{Config.KC_ISSUER}</code>.</p>
         </div>
         <div class="info-card">
-            <h3>Ruoli validi</h3>
-            <ul class="role-list">
-                <li>admin</li>
-                <li>automobilista</li>
-                <li>perito</li>
-                <li>officina</li>
-                <li>assicuratore</li>
-                <li>azienda</li>
+            <h3>Ruoli</h3>
+            <ul>
+                <li>admin</li><li>automobilista</li><li>perito</li>
+                <li>officina</li><li>assicuratore</li><li>soccorso</li><li>azienda</li>
             </ul>
         </div>
         <div class="info-card">
             <h3>Formato errori</h3>
-            <div class="error-schema"><pre>{{"error": "CODICE_ERRORE", "message": "Descrizione"}}</pre></div>
+            <div class="error-schema"><pre>{{"error": "CODICE", "message": "..."}}</pre></div>
         </div>
         <div class="info-card">
             <h3>Errori globali</h3>
-            <ul style="list-style:none; font-size:.85rem;">
-                <li><span class="error-code">404</span> Endpoint non trovato</li>
-                <li><span class="error-code">405</span> Metodo non consentito</li>
-                <li><span class="error-code">500</span> Errore interno</li>
+            <ul>
+                <li><span class="error-code">401</span> UNAUTHORIZED (JWT mancante/non valido)</li>
+                <li><span class="error-code">404</span> NOT_FOUND</li>
+                <li><span class="error-code">405</span> METHOD_NOT_ALLOWED</li>
+                <li><span class="error-code">500</span> INTERNAL_ERROR (incluse MONGO_AUTH_FAILED/UNREACHABLE)</li>
             </ul>
         </div>
     </div>
 
     {sections_html}
 </div>
-
 </body>
 </html>"""
 
-    response = make_response(html)
-    response.headers["Content-Type"] = "text/html; charset=utf-8"
-    return response
+    resp = make_response(html)
+    resp.headers["Content-Type"] = "text/html; charset=utf-8"
+    return resp

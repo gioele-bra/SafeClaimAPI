@@ -14,6 +14,8 @@ from pymongo.errors import OperationFailure, PyMongoError, ServerSelectionTimeou
 from ..services.mongo_service import MongoDBService
 
 bp = Blueprint("dashboard", __name__)
+# Alias legacy per `/api/dashboard` (path inglesi pre-v1).
+legacy_bp = Blueprint("dashboard_legacy", __name__)
 
 SINISTRI_COLLECTION = "Proto_Sinistro_SC"
 SETTINGS_COLLECTION = "Proto_Impostazioni_Soccorso_SC"
@@ -195,7 +197,6 @@ def _set_operativo_online(value: bool) -> None:
 # ---------------------------------------------------------------------------
 
 
-@bp.get("/summary")
 def get_summary():
     try:
         col = _sinistri()
@@ -243,7 +244,6 @@ def get_summary():
         return _mongo_error_response(e, "/dashboard/summary")
 
 
-@bp.get("/requests")
 def get_requests():
     try:
         col = _sinistri()
@@ -261,7 +261,6 @@ def get_requests():
         return _mongo_error_response(e, "/dashboard/requests")
 
 
-@bp.patch("/operational-status")
 def patch_operational_status():
     payload = request.get_json(silent=True) or {}
     operativo_online = payload.get("operativo_online")
@@ -283,3 +282,20 @@ def patch_operational_status():
 
     # Ritorna la summary aggiornata per coerenza con il vecchio contratto.
     return get_summary()
+
+
+# ---------------------------------------------------------------------------
+# Route canoniche su `bp` → /api/v1/dashboard (italiane)
+# ---------------------------------------------------------------------------
+
+bp.add_url_rule("/riepilogo",        "get_riepilogo",     get_summary,              methods=["GET"])
+bp.add_url_rule("/coda",             "get_coda",          get_requests,             methods=["GET"])
+bp.add_url_rule("/stato-operativo",  "patch_stato_op",    patch_operational_status, methods=["PATCH"])
+
+# ---------------------------------------------------------------------------
+# Alias legacy su `legacy_bp` → /api/dashboard (inglesi)
+# ---------------------------------------------------------------------------
+
+legacy_bp.add_url_rule("/summary",             "get_summary_legacy", get_summary,              methods=["GET"])
+legacy_bp.add_url_rule("/requests",            "get_requests_legacy", get_requests,             methods=["GET"])
+legacy_bp.add_url_rule("/operational-status",  "patch_op_status_legacy", patch_operational_status, methods=["PATCH"])

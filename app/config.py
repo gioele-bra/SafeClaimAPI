@@ -57,6 +57,14 @@ class Config:
     )
     JWT_LEEWAY_SECONDS = int(os.getenv("JWT_LEEWAY_SECONDS", "30"))
 
+    # === Documentazione API — Keycloak OIDC code flow ===
+    # Client confidenziale dedicato alla pagina /documentation/.
+    # Vedi handoff §13 per la procedura di creazione su Keycloak.
+    KC_DOCS_CLIENT_ID = os.getenv("KC_DOCS_CLIENT_ID", "")
+    KC_DOCS_CLIENT_SECRET = os.getenv("KC_DOCS_CLIENT_SECRET", "")
+    # Ruolo realm richiesto per accedere alla documentazione.
+    KC_DOCS_REQUIRED_ROLE = os.getenv("KC_DOCS_REQUIRED_ROLE", "admin")
+
     def __repr__(self):
         # mostra solo valori non sensibili per debugging
         return (

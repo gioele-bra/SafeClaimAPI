@@ -12,6 +12,8 @@ from .dashboard import SINISTRI_COLLECTION, _STATE_ALIASES
 from ..services.mongo_service import MongoDBService
 
 bp = Blueprint("analytics", __name__)
+# Alias legacy per `/api/analytics` (path inglesi pre-v1).
+legacy_bp = Blueprint("analytics_legacy", __name__)
 
 
 # Riusa la mappatura centralizzata in dashboard.py (single source of truth).
@@ -39,7 +41,6 @@ def _bucketize(raw_state) -> str:
     return _BUCKETS.get(str(raw_state or "").strip().lower(), "other")
 
 
-@bp.get("/summary")
 def get_analytics_summary():
     """Conteggi totali + tempo medio di assegnazione (minuti)."""
     try:
@@ -77,7 +78,6 @@ def get_analytics_summary():
     }), 200
 
 
-@bp.get("/last-days/<int:days>")
 def get_last_days(days):
     """Serie temporale: numero sinistri per giorno, ultimi N giorni."""
     if days < 1 or days > 365:
@@ -111,7 +111,6 @@ def get_last_days(days):
     return jsonify({"days": days, "data": series}), 200
 
 
-@bp.get("/fleet-status")
 def get_fleet_status():
     """Stato attuale della flotta letto da MySQL `Veicoli`."""
     try:
@@ -131,3 +130,20 @@ def get_fleet_status():
             "error": "INTERNAL_ERROR",
             "message": "Errore nel recupero dello stato flotta",
         }), 500
+
+
+# ---------------------------------------------------------------------------
+# Route canoniche su `bp` → /api/v1/analytics (italiane)
+# ---------------------------------------------------------------------------
+
+bp.add_url_rule("/riepilogo",            "get_riepilogo",     get_analytics_summary, methods=["GET"])
+bp.add_url_rule("/ultimi-giorni/<int:days>", "get_ultimi",    get_last_days,         methods=["GET"])
+bp.add_url_rule("/stato-flotta",         "get_stato_flotta",  get_fleet_status,      methods=["GET"])
+
+# ---------------------------------------------------------------------------
+# Alias legacy su `legacy_bp` → /api/analytics (inglesi)
+# ---------------------------------------------------------------------------
+
+legacy_bp.add_url_rule("/summary",             "summary_legacy",     get_analytics_summary, methods=["GET"])
+legacy_bp.add_url_rule("/last-days/<int:days>", "last_days_legacy",  get_last_days,         methods=["GET"])
+legacy_bp.add_url_rule("/fleet-status",        "fleet_status_legacy", get_fleet_status,      methods=["GET"])
