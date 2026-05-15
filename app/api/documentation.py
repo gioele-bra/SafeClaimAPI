@@ -100,6 +100,15 @@ def require_docs_auth(view):
 
 @bp.get("/auth/login")
 def auth_login():
+    if not current_app.config.get("SECRET_KEY"):
+        return _render_error(
+            "Documentazione non configurata",
+            "Flask <code>SECRET_KEY</code> non impostata sul server. "
+            "Genera una chiave con "
+            "<code>python3 -c \"import secrets; print(secrets.token_hex(32))\"</code> "
+            "e mettila in <code>.env</code> come <code>SECRET_KEY=...</code>, poi riavvia."
+        ), 503
+
     if not Config.KC_DOCS_CLIENT_ID or not Config.KC_DOCS_CLIENT_SECRET:
         return _render_error(
             "Documentazione non configurata",
@@ -112,11 +121,14 @@ def auth_login():
     # Salviamo il path richiesto pre-login (default: root della doc).
     session["docs_next"] = request.args.get("next") or url_for("documentation.get_documentation")
 
+    redirect_uri = _redirect_uri()
+    current_app.logger.info("OIDC docs: redirect_uri usato = %s", redirect_uri)
+
     params = {
         "client_id": Config.KC_DOCS_CLIENT_ID,
         "response_type": "code",
         "scope": "openid profile email",
-        "redirect_uri": _redirect_uri(),
+        "redirect_uri": redirect_uri,
         "state": state,
     }
     return redirect(f"{_oidc_authorize_url()}?{urlencode(params)}")

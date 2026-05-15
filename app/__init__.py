@@ -1,4 +1,6 @@
 from flask import Flask, jsonify
+from werkzeug.middleware.proxy_fix import ProxyFix
+
 from .config import Config
 from .extensions import cors, init_mysql
 from .errors import register_error_handlers
@@ -8,6 +10,13 @@ from .auth_middleware import register_auth_middleware
 def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
+
+    # L'app gira dietro Nginx Proxy Manager. Senza ProxyFix, Flask non si
+    # fida degli header X-Forwarded-* e genera URL assoluti (es. il
+    # redirect_uri OIDC della doc) usando scheme/host interni invece di
+    # `https://safeclaim.giobra.com`. ProxyFix legge X-Forwarded-Proto/
+    # X-Forwarded-Host dal primo hop e li applica al request.
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1, x_for=1)
 
     # Session cookie hardening (usata da /documentation/ con OIDC).
     app.config["SESSION_COOKIE_HTTPONLY"] = True
