@@ -2,7 +2,7 @@ from flask import Blueprint, jsonify, request, g
 
 bp = Blueprint("gestioneUtenti", __name__)
 
-VALID_ROLES = {"admin", "automobilista", "perito", "officina", "assicuratore", "azienda"}
+VALID_ROLES = {"admin", "automobilista", "perito", "officina", "soccorso", "assicuratore", "azienda"}
 
 
 def _format_user(row):
