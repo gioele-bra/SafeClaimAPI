@@ -1,14 +1,3 @@
-"""Blueprint utenti — consolida le 4 vecchie risorse:
-
-  * `/api/admin/*`                 (rimosso, era duplicato di gestioneUtenti)
-  * `/api/gestioneUtenti/utenti/*` (alias legacy)
-  * `/api/creazioneUtenti/users`   (alias legacy → POST /api/v1/utenti)
-  * `/api/home-admin/stats-ruoli`  (alias legacy → /api/v1/utenti/stats-ruoli)
-
-Sorgente di verità: tabella MySQL `Utente`, sync su Keycloak via
-`keycloak_service` per crea/aggiorna password.
-"""
-
 from flask import Blueprint, current_app, g, jsonify, request
 from werkzeug.security import generate_password_hash
 
@@ -71,13 +60,7 @@ def _not_found():
 
 
 def list_utenti():
-    """GET /api/v1/utenti — lista utenti con search/paginazione opzionali.
-
-    Query params:
-      * `search`   — like su nome/cognome/email
-      * `page`     — pagina (1-based, default 1)
-      * `per_page` — dimensione pagina (default 50, max 200)
-    """
+    """GET /api/v1/utenti — lista utenti con search/paginazione opzionali."""
     search = (request.args.get("search") or "").strip()
     try:
         page = max(int(request.args.get("page", 1)), 1)
@@ -154,10 +137,32 @@ def update_utente(user_id):
 
 
 def delete_utente(user_id):
-    g.db.execute("DELETE FROM Utente WHERE id = %s", (user_id,))
-    if g.db.rowcount == 0:
+    """DELETE /api/v1/utenti/<user_id> — elimina utente da Keycloak e MySQL."""
+    g.db.execute("SELECT keycloak_id FROM Utente WHERE id = %s", (user_id,))
+    row = g.db.fetchone()
+    if not row:
         return _not_found()
-    return jsonify({"message": f"Utente {user_id} eliminato con successo"}), 200
+
+    kc_id = row.get("keycloak_id")
+
+    # 1) Eliminazione coordinata su Keycloak
+    if kc_id:
+        try:
+            kc_delete_user(kc_id)
+        except KeycloakError as e:
+            current_app.logger.error("Keycloak: eliminazione utente fallita per %s: %s", kc_id, e)
+            return jsonify({
+                "error": "KEYCLOAK_ERROR",
+                "message": "Impossibile rimuovere l'utente dal provider di identità. Operazione interrotta."
+            }), 502
+
+    # 2) Eliminazione da MySQL
+    g.db.execute("DELETE FROM Utente WHERE id = %s", (user_id,))
+    
+    return jsonify({
+        "status": "success",
+        "message": f"Utente {user_id} rimosso correttamente da database e Keycloak"
+    }), 200
 
 
 def update_ruoli(user_id):
@@ -187,7 +192,7 @@ def update_ruoli(user_id):
 
     g.db.execute(
         "UPDATE Utente SET ruolo = %s WHERE id = %s",
-        (",".join(roles_input), user_id),
+        (",",join(roles_input), user_id),
     )
     g.db.execute("SELECT * FROM Utente WHERE id = %s", (user_id,))
     return jsonify({
@@ -331,7 +336,6 @@ bp.add_url_rule("/<int:user_id>/ruoli", "update_ruoli",  update_ruoli,  methods=
 # Alias legacy — mantenuti per compat client pre-v1
 # ---------------------------------------------------------------------------
 
-# /api/gestioneUtenti/* → mappato sui canonical
 legacy_gestione_bp.add_url_rule("/utenti",        "list_legacy",   list_utenti,   methods=["GET"])
 legacy_gestione_bp.add_url_rule("/utenti/",       "list_legacy_s", list_utenti,   methods=["GET"])
 legacy_gestione_bp.add_url_rule("/utenti/count",  "count_legacy",  count_utenti,  methods=["GET"])
@@ -346,8 +350,6 @@ def _legacy_search():
     q = (request.args.get("q") or "").strip()
     if not q:
         return _bad_request("parametro 'q' obbligatorio")
-    # Riusa list_utenti via mutazione args (Werkzeug args è immutabile,
-    # quindi facciamo query diretta per non duplicare logica).
     like = f"%{q}%"
     g.db.execute(
         "SELECT * FROM Utente WHERE nome LIKE %s OR cognome LIKE %s OR email LIKE %s",
@@ -358,10 +360,5 @@ def _legacy_search():
 
 
 legacy_gestione_bp.add_url_rule("/utenti/cerca", "cerca_legacy", _legacy_search, methods=["GET"])
-
-# /api/creazioneUtenti/users → POST canonical
 legacy_creazione_bp.add_url_rule("/users", "create_legacy", create_utente, methods=["POST"])
-
-# /api/home-admin/stats-ruoli → /api/v1/utenti/stats-ruoli
-legacy_home_admin_bp.add_url_rule("/stats-ruoli", "stats_ruoli_legacy",
-                                    stats_ruoli, methods=["GET"])
+legacy_home_admin_bp.add_url_rule("/stats-ruoli", "stats_ruoli_legacy", stats_ruoli, methods=["GET"])
