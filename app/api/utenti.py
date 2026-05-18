@@ -192,7 +192,7 @@ def update_ruoli(user_id):
 
     g.db.execute(
         "UPDATE Utente SET ruolo = %s WHERE id = %s",
-        (",",join(roles_input), user_id),
+        (",".join(roles_input), user_id),
     )
     g.db.execute("SELECT * FROM Utente WHERE id = %s", (user_id,))
     return jsonify({
